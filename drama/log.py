@@ -96,22 +96,25 @@ class MsgOutHandler(_logging.Handler):
             self.handleError(record)
 
 
-def setup(taskname):
+def setup(taskname=None):
     '''
     Simple setup for DRAMA tasks:
         - root level set to INFO
-        - file output to /jac_logs/YYYYMMDD/<taskname>.log
-        - <=INFO to MsgOut, >=WARN to ErsOut
         - console output to stderr
+        - <=INFO to MsgOut, >=WARN to ErsOut
+        - if taskname, file output to /jac_logs/YYYYMMDD/<taskname>.log
+    
     Returns the handlers added to logging.root if you need to customize:
-        (strftime_handler, msgout_handler, stream_handler)
+        (stream_handler, msgout_handler, strftime_handler)
     '''
     
     f = _logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s')
-    strftime_h = StrftimeHandler('/jac_logs/%%Y%%m%%d/%s.log' % (taskname),
-                        utc=True, chmod=02777)
-    strftime_h.setFormatter(f)
-    _logging.root.addHandler(strftime_h)
+    strftime_h = None
+    if taskname:
+        strftime_h = StrftimeHandler('/jac_logs/%%Y%%m%%d/%s.log' % (taskname),
+                                     utc=True, chmod=02777)
+        strftime_h.setFormatter(f)
+        _logging.root.addHandler(strftime_h)
 
     stream_h = _logging.StreamHandler()
     stream_h.setFormatter(f)
@@ -125,6 +128,6 @@ def setup(taskname):
 
     _logging.root.setLevel(_logging.INFO)
     
-    return strftime_h, msgout_h, stream_h
+    return stream_h, msgout_h, strftime_h
 
 
