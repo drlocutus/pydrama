@@ -1223,6 +1223,7 @@ def msgout(m):
     Also copies message to JIT_MSG_OUT parameter for external monitors.
     '''
     cdef StatusType status = 0
+    m = str(m)
     MsgOut(&status, m)
     if status != 0:
         raise BadStatus(status, "MsgOut(%s)" % (m) )
@@ -1244,6 +1245,7 @@ def ersrep(e):
           or do we need to set bad status as well?
     '''
     cdef StatusType status = 0
+    e = str(e)
     flags = ERS_M_NOFMT | ERS_M_HIGHLIGHT
     ErsRep(flags, &status, e)
     if status != 0:
@@ -1269,6 +1271,7 @@ def ersout(e):
           or do we need to set bad status as well?
     '''
     cdef StatusType status = 0
+    e = str(e)
     flags = ERS_M_NOFMT | ERS_M_HIGHLIGHT
     ErsOut(flags, &status, e)
     if status != 0:
