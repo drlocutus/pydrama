@@ -1327,7 +1327,7 @@ def _wait(secs):
     else:
         s = float(secs)
         if s > 315360000.0:  # 10*365*86400
-            s = s - time.time()
+            s = s - _time.time()
         if s <= 0.0:
             raise Timeout(secs)
         jitDelayRequest(s, &status)
