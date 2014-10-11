@@ -676,6 +676,21 @@ class Message:
             self.arg_name, self.arg_list, self.arg_dict, self.arg_extra)
 
 
+def absolute_timeout(seconds):
+    '''
+    Given seconds, return an absolute timeout based on current time.time().
+    If seconds is None, return None.
+    If seconds is >10yr, assume it is already
+    an absolute timeout and return it unchanged.
+    '''
+    if seconds is None:
+        return seconds
+    seconds = float(seconds)
+    if seconds > 315360000.0:  # 10 * 365 * 86400
+        return seconds
+    return _time.time() + seconds
+
+
 class Transaction:
     '''
     Base class for keeping track of ongoing DRAMA transactions.
@@ -716,20 +731,17 @@ class Transaction:
     
     def join(self, timeout=None):
         '''
-        Waits up to 'timeout' seconds (forever if None, the default)
-        for running==False.
+        Wait for running==False.  'timeout' can be None (wait forever),
+        seconds to wait, or an absolute unix timestamp to wait until
+        (seconds since 19700101, like time.time()).
         
         BEWARE: This function calls wait(), which allows other actions
         to run concurrently and can receive messages and raise exceptions
         for ANY of your action's other running Transactions.
         '''
-        if self.running:
-            if timeout is not None:
-                until = _time.time() + timeout
-            while self.running:
-                wait(timeout, self)
-                if timeout is not None:
-                    timeout = until - _time.time()
+        timeout = absolute_timeout(timeout)
+        while self.running:
+            wait(timeout, self)
 
 
 cdef DitsPathType get_path(object task, double timeout=10.0) except NULL:
@@ -741,6 +753,10 @@ cdef DitsPathType get_path(object task, double timeout=10.0) except NULL:
     Set timeout to 0.0 to prevent wait() entirely, raising BadStatus if
     a valid path is not already cached.  Useful for Monitor.cancel(),
     where calling wait() might not be safe.
+    
+    timeout can be absolute (seconds since 19700101), ala time.time().
+    Sorry, there's no 'wait forever' support for this function;
+    you'll have to settle for waiting a ridiculously long time.
     
     TODO: NULL is assumed to be an error value for path, but I might
           need to change to 'except? NULL' or 'except *' if NULL is okay.
@@ -1118,6 +1134,8 @@ class Parameter(Transaction):
         for self.running to be False, then returns the value taken
         from the completion message argument or raises Timeout.
         
+        timeout can be absolute (seconds since 19700101) ala time.time().
+        
         Caches the value as self._value for repeated calls.
         
         BEWARE: This function calls wait(), which allows other actions to run
@@ -1288,6 +1306,7 @@ def _wait(secs):
     '''
     Main interface for yielding control back to DRAMA.
     Sleeps up to 'secs' seconds (or forever if None) until a message arrives.
+    'secs' can also be an absolute timeout, seconds since 19700101.
     Updates and returns the associated Transaction object.
     Raises:
         Timeout    on RESCHED
@@ -1307,10 +1326,11 @@ def _wait(secs):
         DitsPutRequest(DITS_REQ_SLEEP, &status)
     else:
         s = float(secs)
+        if s > 315360000.0:  # 10*365*86400
+            s = s - time.time()
         if s <= 0.0:
             raise Timeout(secs)
-        else:
-            jitDelayRequest(s, &status)
+        jitDelayRequest(s, &status)
 
     # return control to DRAMA and wait for next message
     _log.debug("_wait: switching from greenlet %s to parent %s" % (g, g.parent))
@@ -1367,14 +1387,13 @@ def delay(secs):
     Wait 'secs' seconds for a RESCHED, regardless of any other messages
     that arrive in the meantime.  Use this instead of time.sleep()
     to maintain concurrency with other actions.
+    'secs' can be an absolute timeout, seconds since 19700101.
     '''
-    s = float(secs)
+    until = absolute_timeout(float(secs))  # cannot be None
     try:
-        t_end = _time.time() + s
-        _wait(s)
+        _wait(secs)  # try to avoid instant timeout for tiny secs
         while True:
-            s = t_end - _time.time()
-            _wait(s)
+            _wait(until)  # now use the absolute timeout
     except Timeout:
         pass
 
@@ -1383,6 +1402,7 @@ def wait(secs=None, objs=None):
     '''
     Wait up to 'secs' (or forever if None) for messages affecting one of
     'objs' (or any if None) and return the affected object.
+    'secs' can be an absolute timeout, seconds since 19700101.
     Note that this function can raise exceptions for any transactions
     started by the current action, not just those in 'objs'.
     Raises:
@@ -1403,24 +1423,13 @@ def wait(secs=None, objs=None):
         if not isinstance(o, Transaction):
             raise TypeError('bad wait type ' + str(type(o)))
     
-    if secs is None:
-        obj = _wait(secs)
-        while objs and obj not in objs:
-            obj = _wait(secs)
-        return obj
-
-    s = float(secs)
-    if s <= 0.0:
-        raise Timeout(secs,objs)
+    until = absolute_timeout(secs)
     try:
-        t_end = _time.time() + s
-        obj = _wait(s)
+        obj = _wait(secs)  # try to avoid instant timeout for tiny secs
         while objs and obj not in objs:
-            s = t_end - _time.time()
-            obj = _wait(s)
+            obj = _wait(until)  # now use the absolute timeout
     except Timeout:
-        raise Timeout(secs,objs)
-
+        raise Timeout(secs, objs)
     return obj
 
 
