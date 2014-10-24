@@ -11,7 +11,10 @@ if platform.machine() == 'x86_64':
 
 ext_modules = [
     Extension("drama.__drama__", ["src/drama.pyx"],
-        depends=['setup.py', 'src/drama.pxd', 'src/ditsaltin.h'],
+        depends=['setup.py',
+                 'src/drama.pxd',
+                 'src/ditsaltin.h',
+                 'src/ditsmsg.h'],
         include_dirs=['./',
             '/jac_sw/drama/CurrentRelease/include',
             '/jac_sw/drama/CurrentRelease/include/os/' + Linux,

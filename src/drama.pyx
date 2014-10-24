@@ -807,8 +807,9 @@ class Obey(Transaction):
     '''
     Invokes an action and monitors its status.
     Instance attributes (besides those from Transaction):
-        task     str, name of target task
-        action   str, name of target action
+        task        str,  name of target task
+        action      str,  name of target action
+        interested  bool, get DITS_REA_MESSAGE & DITS_REA_ERROR if True
     '''
     
     def __init__(self, task, action, *args, **kwargs):
@@ -825,6 +826,7 @@ class Obey(Transaction):
         cdef DitsPathType path
         self.task = task
         self.action = action
+        self.interested = False
         path = get_path(task)
         argid = make_argument(*args, **kwargs)
         DitsObey(path, action, argid, &transid, &status)
@@ -855,6 +857,24 @@ class Obey(Transaction):
         if status != 0:
             raise BadStatus(status, "DitsKick(%s,%s,%d)" % \
                             (self.task, self.action, argid) )
+
+    def set_interested(self, i=True):
+        '''
+        Express interest in MESSAGE and ERROR messages.
+        Calls DitsInterested if i==True (the default).
+        Never calls DitsNotInterested, since the Dits functions
+        are action-wide and other Obey instances might still
+        be interested, even if we're not.  Uninterested Obey instances
+        will have their MESSAGE and ERROR messages forwarded
+        on to the parent action using the forward() function.
+        '''
+        cdef StatusType status = 0
+        self.interested = bool(i)
+        if i:
+            DitsInterested(DITS_MSG_M_MESSAGE | DITS_MSG_M_ERROR, &status)
+            if status:
+                raise BadStatus(status, "DitsInterested("
+                                        "DITS_MSG_M_MESSAGE|DITS_MSG_M_ERROR")
 
 
 class Kick(Transaction):
@@ -1234,6 +1254,89 @@ def blind_obey(task, action, *args, **kwargs):
         raise BadStatus(status, "DitsObey(%s,%s,%d)" % (task, action, argid) )
 
 
+def _IS_ACTIVE_(task, action, timeout=None):
+    '''
+    Action to query task:HELP for " action (Active)".
+    Triggers parent if task:action is active.
+    Don't invoke this action directly;
+    use the is_active() function instead.
+    
+    NOTE: We don't just invoke task:HELP directly from is_active()
+    because reading the MESSAGE reply from HELP requires
+    DitsInterested, which affects all OBEY transactions started
+    by the current action.  So we start a separate action
+    that only does this one thing to avoid unintended side effects.
+    
+    This is somewhat problematic as it means that only one
+    action can invoke _IS_ACTIVE_ at a time.  
+    '''
+    cdef StatusType status = 0
+    DitsInterested(DITS_MSG_M_MESSAGE, &status)
+    if status:
+        raise BadStatus(status, "DitsInterested(DITS_MSG_M_MESSAGE)")
+    needle = " %s (Active)" % (action)
+    found = False
+    o = Obey(task, "HELP")
+    o.join(timeout)
+    while o.messages:
+        m = o.messages.pop()
+        tn = m.arg_dict["TASKNAME"]
+        msg = m.arg_dict["MESSAGE"]
+        if tn == task and msg.find(needle) >= 0:
+            found = True
+    if found:
+        trigger()
+
+
+def is_active(task, action, timeout=None):
+    '''
+    Return True if task:action is active, else False.
+    Adds _IS_ACTIVE_ to the task's registered actions.
+    '''
+    if not "_IS_ACTIVE_" in _actions:
+        register_action("_IS_ACTIVE_", _IS_ACTIVE_)
+    o = Obey(_taskname, "_IS_ACTIVE_", task, action, timeout)
+    o.join(timeout)
+    active = bool(o.messages)
+    o.messages.clear()
+    return active
+
+
+def is_active_2(task, action, timeout=None):
+    '''
+    Return True if task:action is active, else False.
+    Queries task:HELP for " action (Active)".
+    '''
+    needle = " %s (Active)" % (action)
+    o = Obey(task, "HELP")
+    o.set_interested(True)
+    o.join(timeout)
+    while o.messages:
+        m = o.messages.pop()
+        tn = m.arg_dict["TASKNAME"]
+        msg = m.arg_dict["MESSAGE"]
+        if tn == task and msg.find(needle) >= 0:
+            o.messages.clear()
+            return True
+    return False
+
+
+def forward():
+    '''
+    Call Dits___MsgRespond(DITS_RESP_FORWARD) to relay the
+    current message to the action's parent.  Only intended
+    for use by _wait() to handle uninteresting messages
+    of the DITS_REA_MESSAGE and DITS_REA_ERROR variety.
+    '''
+    cdef StatusType status = 0
+    cdef ResponseDetailsType details
+    memset(&details, 0, sizeof(details))
+    details.response = DITS_RESP_FORWARD
+    Dits___MsgRespond(&details, NULL, &status)
+    if status:
+        raise BadStatus(status, "Dits___MsgRespond(DITS_RESP_FORWARD)")
+
+
 def msgout(m):
     '''
     Calls MsgOut(STATUS__OK, str).
@@ -1321,64 +1424,85 @@ def _wait(secs):
     cdef StatusType status = 0
     g = _greenlet.getcurrent()
     transactions = g.transactions
+    
+    until = absolute_timeout(secs)
+    obj = None
+    first = True
+    
+    while obj is None:  # loop while ignoring/forwarding messages
 
-    if secs is None:
-        DitsPutRequest(DITS_REQ_SLEEP, &status)
-    else:
-        s = float(secs)
-        if s > 315360000.0:  # 10*365*86400
-            s = s - _time.time()
-        if s <= 0.0:
-            raise Timeout(secs)
-        jitDelayRequest(s, &status)
+        if secs is None:
+            DitsPutRequest(DITS_REQ_SLEEP, &status)
+        else:
+            if first:  # try to avoid instant timeout for tiny secs
+                s = float(secs)
+                if s > 315360000.0:  # 10*365*86400
+                    s = s - _time.time()
+            else:
+                s = until - _time.time()
+            if s <= 0.0:
+                raise Timeout(secs)
+            jitDelayRequest(s, &status)
+        
+        first = False
 
-    # return control to DRAMA and wait for next message
-    _log.debug("_wait: switching from greenlet %s to parent %s" % (g, g.parent))
-    msg = g.parent.switch()
-    _log.debug("_wait: switch returned %s" % (msg))
+        # return control to DRAMA and wait for next message
+        _log.debug("_wait: switching from greenlet %s to parent %s" % (g, g.parent))
+        msg = g.parent.switch()
+        _log.debug("_wait: switch returned %s" % (msg))
 
-    try:
-        if msg.reason == DITS_REA_RESCHED:
-            raise Timeout(secs)
-        elif msg.reason == DITS_REA_KICK:
-            raise Kicked(msg)
-        elif msg.reason == DITS_REA_ASTINT:
-            # signal from peer, get Signal instance to pass this to
-            obj = transactions[0]
-            obj.messages.push(msg)
-        elif msg.reason == DITS_REA_COMPLETE \
-             or msg.reason == DITS_REA_DIED \
-             or msg.reason == DITS_REA_MESREJECTED \
-             or msg.reason == DITS_REA_PATHFOUND \
-             or msg.reason == DITS_REA_PATHFAILED:
-            # find the matching transaction handler
-            obj = transactions[msg.transid]
-            obj.running = False
-            obj.status = msg.status
-            # might be a parameter message, push if args
-            if msg.arg_list or msg.arg_dict:
+        try:
+            if msg.reason == DITS_REA_RESCHED:
+                raise Timeout(secs)
+            elif msg.reason == DITS_REA_KICK:
+                raise Kicked(msg)
+            elif msg.reason == DITS_REA_ASTINT:
+                # signal from peer, get Signal instance to pass this to
+                obj = transactions[0]
                 obj.messages.push(msg)
-            del transactions[msg.transid]  # transaction complete
-            if msg.reason == DITS_REA_DIED:
-                raise Died(obj)
-            if msg.reason == DITS_REA_PATHFAILED:
-                msg.status = msg.status or DITS__INVPATH
-            if msg.status != 0:
-                raise BadStatus(msg.status, obj)
-        elif msg.reason == DITS_REA_TRIGGER:
-            # find the matching transaction handler
-            obj = transactions[msg.transid]
-            if msg.status == DITS__MON_STARTED:
-                obj.monid = int(msg.arg_dict['MONITOR_ID'])
-                obj.running = True
-            elif msg.status == DITS__MON_CHANGED or isinstance(obj, Obey):
-                obj.messages.push(msg)
+            elif msg.reason == DITS_REA_COMPLETE \
+                 or msg.reason == DITS_REA_DIED \
+                 or msg.reason == DITS_REA_MESREJECTED \
+                 or msg.reason == DITS_REA_PATHFOUND \
+                 or msg.reason == DITS_REA_PATHFAILED:
+                # find the matching transaction handler
+                obj = transactions[msg.transid]
+                obj.running = False
+                obj.status = msg.status
+                # might be a parameter message, push if args
+                if msg.arg_list or msg.arg_dict:
+                    obj.messages.push(msg)
+                del transactions[msg.transid]  # transaction complete
+                if msg.reason == DITS_REA_DIED:
+                    raise Died(obj)
+                if msg.reason == DITS_REA_PATHFAILED:
+                    msg.status = msg.status or DITS__INVPATH
+                if msg.status != 0:
+                    raise BadStatus(msg.status, obj)
+            elif msg.reason == DITS_REA_TRIGGER:
+                # find the matching transaction handler
+                obj = transactions[msg.transid]
+                if msg.status == DITS__MON_STARTED:
+                    obj.monid = int(msg.arg_dict['MONITOR_ID'])
+                    obj.running = True
+                elif msg.status == DITS__MON_CHANGED or isinstance(obj, Obey):
+                    obj.messages.push(msg)
+                else:
+                    raise Unexpected(msg)
+            elif msg.reason == DITS_REA_MESSAGE \
+                 or msg.reason == DITS_REA_ERROR:
+                # find matching Obey, see if it wants this message
+                obj = transactions[msg.transid]
+                if obj.interested:
+                    obj.messages.push(msg)
+                else:
+                    obj = None
+                    forward()
             else:
                 raise Unexpected(msg)
-        else:
+        except KeyError:  # failed to find an object for this message
             raise Unexpected(msg)
-    except KeyError:  # failed to find an object for this message
-        raise Unexpected(msg)
+    
     return obj
 
 

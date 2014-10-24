@@ -144,10 +144,11 @@ cdef extern from "sds_err.h":
     enum:
         SDS__UNDEFINED
 
-# needed for DitsSds.h
 cdef extern from "DitsSystem.h":
-    pass
-
+    
+    enum Dits___ResponseType:
+        DITS_RESP_FORWARD
+        
 cdef extern from "DitsSds.h":
 
     enum:
@@ -193,6 +194,12 @@ cdef extern from "DitsSds.h":
 
 cdef extern from "DitsTypes.h":
 
+    enum:
+        DITS_MSG_M_MESSAGE
+        DITS_MSG_M_ERROR
+    
+    ctypedef long DitsMsgMaskType
+    
     void * DitsMalloc(int size)
     void DitsFree(void *ptr)
 
@@ -279,6 +286,20 @@ cdef extern from "ditsaltin.h":
         long exit_flag
         Dits___AltInElemType Array[DITS_C_ALT_IN_MAX]
 
+cdef extern from "imp.h":
+    cdef struct IMP_TaskID:
+        int Machine
+        int Pid
+
+cdef extern from "ditsmsg.h":
+    ctypedef struct ResponseDetailsType:
+        SdsIdType sdsId
+        int flags
+        Dits___ResponseType response
+    
+    void Dits___MsgRespond(ResponseDetailsType *respDetails,
+                           IMP_TaskID *taskId, StatusType *status)
+
 cdef extern from "DitsSys.h":
 
     enum:
@@ -360,6 +381,8 @@ cdef extern from "DitsInteraction.h":
     
     void DitsSetParam(DitsPathType path, char *param, SdsIdType arg,
                       DitsTransIdType *transid, StatusType *status)
+
+    void DitsInterested(DitsMsgMaskType mask, StatusType *status)
 
 cdef extern from "DitsFix.h":
 
