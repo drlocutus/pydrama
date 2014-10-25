@@ -145,9 +145,7 @@ cdef extern from "sds_err.h":
         SDS__UNDEFINED
 
 cdef extern from "DitsSystem.h":
-    
-    enum Dits___ResponseType:
-        DITS_RESP_FORWARD
+    pass
         
 cdef extern from "DitsSds.h":
 
@@ -286,19 +284,9 @@ cdef extern from "ditsaltin.h":
         long exit_flag
         Dits___AltInElemType Array[DITS_C_ALT_IN_MAX]
 
-cdef extern from "imp.h":
-    cdef struct IMP_TaskID:
-        int Machine
-        int Pid
-
 cdef extern from "ditsmsg.h":
-    ctypedef struct ResponseDetailsType:
-        SdsIdType sdsId
-        int flags
-        Dits___ResponseType response
     
-    void Dits___MsgRespond(ResponseDetailsType *respDetails,
-                           IMP_TaskID *taskId, StatusType *status)
+    void MyMsgForward(StatusType *status)
 
 cdef extern from "DitsSys.h":
 
@@ -408,6 +396,12 @@ cdef extern from "DitsMsgOut.h":
 cdef extern from "Sdp.h":
 
     void SdpUpdate(SdsIdType id, StatusType *status)
+
+cdef extern from "DitsUtil.h":
+    
+    long DitsActIndexByName(char *name, long *index, StatusType *status)
+    
+    void DitsIsActionActive(long index, int *active, StatusType *status)
 
 cdef extern from "Dits_Err.h":
 

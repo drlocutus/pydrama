@@ -1254,59 +1254,27 @@ def blind_obey(task, action, *args, **kwargs):
         raise BadStatus(status, "DitsObey(%s,%s,%d)" % (task, action, argid) )
 
 
-def _IS_ACTIVE_(task, action, timeout=None):
-    '''
-    Action to query task:HELP for " action (Active)".
-    Triggers parent if task:action is active.
-    Don't invoke this action directly;
-    use the is_active() function instead.
-    
-    NOTE: We don't just invoke task:HELP directly from is_active()
-    because reading the MESSAGE reply from HELP requires
-    DitsInterested, which affects all OBEY transactions started
-    by the current action.  So we start a separate action
-    that only does this one thing to avoid unintended side effects.
-    
-    This is somewhat problematic as it means that only one
-    action can invoke _IS_ACTIVE_ at a time.  
-    '''
-    cdef StatusType status = 0
-    DitsInterested(DITS_MSG_M_MESSAGE, &status)
-    if status:
-        raise BadStatus(status, "DitsInterested(DITS_MSG_M_MESSAGE)")
-    needle = " %s (Active)" % (action)
-    found = False
-    o = Obey(task, "HELP")
-    o.join(timeout)
-    while o.messages:
-        m = o.messages.pop()
-        tn = m.arg_dict["TASKNAME"]
-        msg = m.arg_dict["MESSAGE"]
-        if tn == task and msg.find(needle) >= 0:
-            found = True
-    if found:
-        trigger()
-
-
 def is_active(task, action, timeout=None):
     '''
     Return True if task:action is active, else False.
-    Adds _IS_ACTIVE_ to the task's registered actions.
+    For local task, uses DitsActIndexByName + DitsIsActionActive;
+    For remote tasks, queries task:HELP for " action (Active)".
+    
+    NOTE: HELP can return a LOT of messages,
+          make sure your buffers are big enough
+          to deal with the flood.
     '''
-    if not "_IS_ACTIVE_" in _actions:
-        register_action("_IS_ACTIVE_", _IS_ACTIVE_)
-    o = Obey(_taskname, "_IS_ACTIVE_", task, action, timeout)
-    o.join(timeout)
-    active = bool(o.messages)
-    o.messages.clear()
-    return active
-
-
-def is_active_2(task, action, timeout=None):
-    '''
-    Return True if task:action is active, else False.
-    Queries task:HELP for " action (Active)".
-    '''
+    cdef StatusType status = 0
+    cdef long index
+    cdef int active
+    if task == _taskname:
+        DitsActIndexByName(action, &index, &status)
+        if status:
+            raise BadStatus(status, "DitsActIndexByName(%s)" % (action))
+        DitsIsActionActive(index, &active, &status)
+        if status:
+            raise BadStatus(status, "DitsActIndexByName(%d (%s))" % (index, action))
+        return bool(active)
     needle = " %s (Active)" % (action)
     o = Obey(task, "HELP")
     o.set_interested(True)
@@ -1314,7 +1282,7 @@ def is_active_2(task, action, timeout=None):
     while o.messages:
         m = o.messages.pop()
         tn = m.arg_dict["TASKNAME"]
-        msg = m.arg_dict["MESSAGE"]
+        msg = m.arg_dict["MESSAGE"][0]  # MESSAGE is array of |S200
         if tn == task and msg.find(needle) >= 0:
             o.messages.clear()
             return True
@@ -1323,18 +1291,15 @@ def is_active_2(task, action, timeout=None):
 
 def forward():
     '''
-    Call Dits___MsgRespond(DITS_RESP_FORWARD) to relay the
+    Call MyMsgForward from local ditsmsg.h to relay the
     current message to the action's parent.  Only intended
     for use by _wait() to handle uninteresting messages
     of the DITS_REA_MESSAGE and DITS_REA_ERROR variety.
     '''
     cdef StatusType status = 0
-    cdef ResponseDetailsType details
-    memset(&details, 0, sizeof(details))
-    details.response = DITS_RESP_FORWARD
-    Dits___MsgRespond(&details, NULL, &status)
+    MyMsgForward(&status)
     if status:
-        raise BadStatus(status, "Dits___MsgRespond(DITS_RESP_FORWARD)")
+        raise BadStatus(status, "MyMsgForward()")
 
 
 def msgout(m):
