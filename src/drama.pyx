@@ -1576,11 +1576,21 @@ cdef void dispatcher(StatusType *status):
             _greenlets[n] = g
             g.transactions = {}
             _log.debug("dispatcher switching to new %s greenlet %s" % (n, g))
-            g.switch(*msg.arg_list, **msg.arg_dict)
+            r = g.switch(*msg.arg_list, **msg.arg_dict)
         else:
             g =  _greenlets[n]
             _log.debug("dispatcher switching to %s greenlet %s" % (n, g))
-            g.switch(msg)
+            r = g.switch(msg)
+        if r is not None:  # action returned a value
+            if isinstance(r, tuple):
+                a = make_argument(*r)  # {'Argument1':r[0], 'Argument2':r[1], ...}
+            elif isinstance(r, dict):
+                a = sds_from_obj(r, 'ArgStructure')  # dict becomes arg
+            else:
+                a = make_argument(r)  # {'Argument1':r}
+            DitsPutArgument(a, DITS_ARG_DELETE, status)
+            if status[0]:
+                raise BadStatus(status[0], "DitsPutArgument(%s)" % (r))
     except (Kicked, Died, Unexpected):
         status[0] = DITS__UNEXPMSG
         _log.exception('%s: unexpected entry reason' % (n))

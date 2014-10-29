@@ -248,6 +248,14 @@ cdef extern from "DitsTypes.h":
         DITS_REQ_END
         DITS_REQ_EXIT
     ctypedef DitsReqEnum DitsReqType
+    
+    enum DitsArgFlagEnum:
+        DITS_ARG_NODELETE
+        DITS_ARG_DELETE
+        DITS_ARG_COPY
+        DITS_ARG_FREEID
+        DITS_ARG_READFREE
+    ctypedef DitsArgFlagEnum DitsArgFlagType
 
 
 cdef extern from "DitsOrphan.h":
@@ -374,9 +382,10 @@ cdef extern from "DitsInteraction.h":
 
 cdef extern from "DitsFix.h":
 
-    # this is actually a macro, hopefully cython doesn't care
     SdsIdType DitsGetArgument()
-    # ditto
+    
+    void DitsPutArgument(SdsIdType arg, DitsArgFlagType flag, StatusType *status)
+    
     void DitsGetName(int namelen, char *action_name, StatusType *status)
 
     void DitsPutRequest(DitsReqType req, StatusType *status)
