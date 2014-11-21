@@ -162,7 +162,7 @@ def INITIALISE(*args, **kwargs):
     global initialise
     if initialise is not None:
         _log.debug("INITIALISE: calling user callback.")
-        initialise(*args, **kwargs)
+        ret = initialise(*args, **kwargs)
     else:
         _log.debug("INITIALISE: no user callback.")
     
@@ -170,6 +170,7 @@ def INITIALISE(*args, **kwargs):
     _drama.set_param("INITIALISED", 1)
     
     _log.debug("INITIALISE: done.")
+    return ret
 
 
 def CONFIGURE(CONFIGURATION="", CONFIGURE_ID=1, ENGIN_MODE=0, *args, **kwargs):
@@ -198,9 +199,9 @@ def CONFIGURE(CONFIGURATION="", CONFIGURE_ID=1, ENGIN_MODE=0, *args, **kwargs):
         global configure
         if configure is not None:
             _log.debug("CONFIGURE: calling user callback.")
-            configure(CONFIGURATION=CONFIGURATION,
-                      CONFIGURE_ID=CONFIGURE_ID,
-                      ENGIN_MODE=ENGIN_MODE, *args, **kwargs)
+            ret = configure(CONFIGURATION=CONFIGURATION,
+                            CONFIGURE_ID=CONFIGURE_ID,
+                            ENGIN_MODE=ENGIN_MODE, *args, **kwargs)
         else:
             _log.debug("CONFIGURE: no user callback.")
         
@@ -209,6 +210,7 @@ def CONFIGURE(CONFIGURATION="", CONFIGURE_ID=1, ENGIN_MODE=0, *args, **kwargs):
         _drama.set_param("CONFIGURED", 1)
         
         _log.debug("CONFIGURE: done.")
+        return ret
         
     except:
         _drama.set_param("CONFIGURE_ID", -9999)
@@ -260,7 +262,7 @@ def SETUP_SEQUENCE(SETUP_SEQ_ID=1, *args, **kwargs):
         global setup_sequence
         if setup_sequence is not None:
             _log.debug("SETUP_SEQUENCE: calling user callback.")
-            setup_sequence(SETUP_SEQ_ID=SETUP_SEQ_ID, *args, **kwargs)
+            ret = setup_sequence(SETUP_SEQ_ID=SETUP_SEQ_ID, *args, **kwargs)
         else:
             _log.debug("SETUP_SEQUENCE: no user callback.")
         
@@ -269,6 +271,7 @@ def SETUP_SEQUENCE(SETUP_SEQ_ID=1, *args, **kwargs):
         _drama.set_param("SETUP", 1)
     
         _log.debug("SETUP_SEQUENCE: done.")
+        return ret
         
     except:
         _drama.set_param("SETUP_SEQ_ID", -9999)
