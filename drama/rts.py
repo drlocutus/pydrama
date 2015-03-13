@@ -22,6 +22,13 @@ sequence_frame = None
 sequence_batch = None
 
 
+# TODO: Need defs for these, from rtsDClient_err.h:
+#  RTSDC__ACTION_WHILE_SEQ_ACTIVE
+#  RTSDC__NOT_INITIALISED
+#  RTSDC__NOT_CONFIGURED
+#  RTSDC__NOT_SETUP
+
+
 def task_wait(funcname, monparam, matchval, badval=-9999,
               wait_tasks=[], path_tasks=[]):
     '''

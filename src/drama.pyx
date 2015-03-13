@@ -43,6 +43,7 @@ import select as _select
 import errno as _errno
 import greenlet as _greenlet
 import numpy as _numpy
+cimport numpy as _numpy
 import logging as _logging
 
 
@@ -118,6 +119,7 @@ _sds_code_to_dtype = {
     SDS_UI64:    _numpy.uint64
 }
 
+# use with str(array.dtype)
 _dtype_to_sds_code = {
     'bool':    SDS_BYTE,
     'float32': SDS_FLOAT,
@@ -131,6 +133,21 @@ _dtype_to_sds_code = {
     'uint32':  SDS_UINT,
     'uint64':  SDS_UI64
 }
+
+# use with array.dtype.str
+#_dtype_to_sds_code = {
+#    '|b1': SDS_BYTE,
+#    '<f4': SDS_FLOAT,
+#    '<f8': SDS_DOUBLE,
+#    '|i1': SDS_BYTE,
+#    '<i2': SDS_SHORT,
+#    '<i4': SDS_INT,
+#    '<i8': SDS_I64,
+#    '|u1': SDS_UBYTE,
+#    '<u2': SDS_USHORT,
+#    '<u4': SDS_UINT,
+#    '<u8': SDS_UI64
+#}
 
 _entry_reason_string = {
     DITS_REA_OBEY:             "DITS_REA_OBEY",
@@ -155,6 +172,28 @@ _entry_reason_string = {
 
 
 ############### Functions and Classes #########################
+
+
+def errors_from_header(filename):
+    '''
+    Look for error code definitions from a header file and return them
+    as a dictionary; use when raising a BadStatus exception.
+    This is intended as a convenience function for other tasks
+    and modules; it is not used by this module directly.
+    
+    TODO: raise an error on empty dict?
+    '''
+    d = {}
+    with open(filename) as f:
+        for line in f:
+            try:
+                toks = line.split()
+                assert len(toks) == 3
+                assert toks[0] == '#define'
+                d[toks[1]] = int(toks[2], 0)  # base 0 = guess
+            except:
+                pass
+    return d
 
 
 def get_status_string(status):
@@ -282,22 +321,27 @@ def sds_from_obj(obj, name="", pid=0):
         # this can end up casting everything to strings :/
         obj = _numpy.array(obj)
         dtype = str(obj.dtype)
+        #dtype = obj.dtype.str  # no real speed improvement
         shape = obj.shape
 
     # for strings, append strlen to dims; get non-struct typecode
     if dtype.startswith("|S"):
         # some DRAMA ops expect null-terminated strings, but
         # python strings usually aren't.
-        slen = int(dtype[2:])
-        maxlen = _numpy.max([len(x) for x in obj.flat])
+        #slen = int(dtype[2:])
+        slen = obj.dtype.itemsize
+        #maxlen = _numpy.max([len(x) for x in obj.flat])  # slow!
+        maxlen = max([len(x) for x in obj.flat])
         if maxlen == slen:  # no space for \0
             slen += 1
-            dtype = '|S%d' % (slen)
+            #dtype = '|S%d' % (slen)
+            dtype = '|S' + str(slen)
             obj = _numpy.array(obj, dtype=dtype)
         shape = list(shape)
         shape.append(slen)
         code = SDS_CHAR
     elif dtype != 'object':
+    #elif not dtype.startswith("|O"):
         code = _dtype_to_sds_code[dtype]
 
     # reverse numpy dim order for dits
@@ -305,6 +349,7 @@ def sds_from_obj(obj, name="", pid=0):
         cdims[i] = shape[-(1+i)]
     
     if dtype == 'object':
+    #if dtype.startswith("|O"):
         # make sure every item is a dict
         for index in _numpy.ndindex(shape):
             if not isinstance(obj[index], dict):
@@ -330,15 +375,17 @@ def sds_from_obj(obj, name="", pid=0):
     if status != 0:
         raise BadStatus(status, "SdsNew(%d,%s,%s,%s)" % (pid, name,
                         _sds_code_string[code], list(reversed(shape))) )
-    obuf = obj.tostring()
-    SdsPut(id, obj.nbytes, 0, <char*>obuf, &status)
+    #obuf = obj.tostring()
+    #SdsPut(id, obj.nbytes, 0, <char*>obuf, &status)
+    # cast to ctype ndarray to avoid expensive tostring() conversion
+    SdsPut(id, obj.nbytes, 0, (<_numpy.ndarray>obj).data, &status)
     if status != 0:
         # NOTE obuf could be huge, so first 16 chars only :/
         dots = ''
-        if len(obuf) > 16:
+        if len(obj.data) > 16:
             dots = '...'
         raise BadStatus(status, "SdsPut(%d,%d,0,%s%s)" % \
-                        (id, obj.nbytes, obuf[:16], dots) )
+                        (id, obj.nbytes, obj.data[:16], dots) )
     return id
 
 
