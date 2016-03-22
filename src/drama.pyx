@@ -295,6 +295,16 @@ def sds_from_obj(obj, name="", pid=0):
     '''
     Given python object, recursively construct and return a new SDS id
     with optional name and parent SDS id.
+    This function is the python wrapper for c-only _sds_from_obj().
+    '''
+    return _sds_from_obj(obj, name, pid)
+
+
+cdef SdsIdType _sds_from_obj(object obj, char* name="", SdsIdType pid=0):
+    '''
+    Given python object, recursively construct and return a new SDS id
+    with optional name and parent SDS id.
+    This is the c-only function for faster recursive calls.
     '''
     cdef SdsIdType id = 0
     cdef StatusType status = 0
@@ -313,7 +323,7 @@ def sds_from_obj(obj, name="", pid=0):
         if status != 0:
             raise BadStatus(status, "SdsNew(%d,%s,SDS_STRUCT)" % (pid,name))
         for k in obj.keys():
-            kid = sds_from_obj(obj[k], k, id)
+            kid = _sds_from_obj(obj[k], k, id)
             SdsFreeId(kid, &status)
         return id
     else:
@@ -360,7 +370,7 @@ def sds_from_obj(obj, name="", pid=0):
             raise BadStatus(status, "SdsNew(%d,%s,SDS_STRUCT,%s)" % \
                             (pid, name, list(reversed(shape))) )
         for index in _numpy.ndindex(shape):
-            kid = sds_from_obj(obj[index], name, 0)
+            kid = _sds_from_obj(obj[index], name, 0)
             # reverse numpy index order for dits and make 1-based
             for i in xrange(len(index)):
                 cindex[i] = index[-(1+i)] + 1
@@ -390,7 +400,18 @@ def sds_from_obj(obj, name="", pid=0):
 
 
 def obj_from_sds(id):
-    '''Given an SDS id, recursively construct and return a python object.'''
+    '''
+    Given an SDS id, recursively construct and return a python object.
+    This is the python wrapper for the c-only _obj_from_sds().
+    '''
+    return _obj_from_sds(id)
+
+
+cdef object _obj_from_sds(SdsIdType id):
+    '''
+    Given an SDS id, recursively construct and return a python object.
+    This is the c-only function for faster recursive calls.
+    '''
     cdef StatusType status = 0
     cdef SdsIdType cid
     cdef ulong cindex[7]
@@ -422,7 +443,7 @@ def obj_from_sds(id):
                 if status != 0:
                     break
                 cname, dummy, dummy = sds_info(cid)
-                obj[cname] = obj_from_sds(cid)
+                obj[cname] = _obj_from_sds(cid)
                 i += 1
                 SdsFreeId(cid, &status)
             return obj
@@ -436,7 +457,7 @@ def obj_from_sds(id):
                 if status != 0:
                     raise BadStatus(status, "SdsCell(%d,%s)" % \
                                     (id, list(reversed(index))) )
-                obj[index] = obj_from_sds(cid)
+                obj[index] = _obj_from_sds(cid)
                 SdsFreeId(cid, &status)
             return obj
 
