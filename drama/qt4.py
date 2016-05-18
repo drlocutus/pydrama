@@ -9,7 +9,7 @@ Example:
 
     import sys
     import drama
-    from drama_qt4 import DramaWidget
+    from drama.qt4 import DramaWidget
     from PyQt4 import QtCore, QtGui
 
     class MyWidget(DramaWidget):
@@ -21,9 +21,9 @@ Example:
             super(MyWidget, self).__init__()
             self.show()
             
-        def ACTION(self, arg=None):
-            drama.msgout("ACTION: %s" % (arg))
-            self.setWindowTitle(str(arg))
+        def ACTION(self, msg):
+            drama.msgout("ACTION: %s" % (msg.arg_list[0]))
+            self.setWindowTitle(str(msg.arg_list[0]))
             self.update()
     
     taskname = "QTASK"

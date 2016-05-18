@@ -32,6 +32,20 @@ A note on logging/debug output:
      
 TODO: tideSetParam for pushing parameter updates back to EPICS space.
 
+-------------------------------
+
+RMB 20160517
+
+Coming back to this after a long hiatus.  I've created a 'simpler'
+git branch which will do away with the greenlet-related stuff;
+python drama will act a lot like C drama with reentrant rescheduled functions.
+User will have to do their own entry-reason checks and such.
+
+It'd be nice to get rid of numpy reliance too.
+
+Another thing that might be slowing us down is constant creation/destruction
+of SDS parameters vs updating existing structures.  
+
 '''
 
 
@@ -41,7 +55,6 @@ import sys as _sys
 import time as _time
 import select as _select
 import errno as _errno
-import greenlet as _greenlet
 import numpy as _numpy
 cimport numpy as _numpy
 import logging as _logging
@@ -66,20 +79,17 @@ cdef int _fd = -1
 # Save task name for stop() and such
 _taskname = ""
 
-# File descriptor callbacks, {read_fd:func(fd)}.  These are NOT ACTIONS.
-_callbacks = {}
+# Stack to track reschedules on the current action
+_rescheduled = []
+
+# Outstanding monitors, {action:[(task,monid),...]}
+_monitors = {}
 
 # Registered task actions, {name:func}.
 _actions = {}
 
-# Greenlets for active actions, {name:greenlet}.
-_greenlets = {}
-
-# Actions must all be started from the same dispatcher context.
-# If dispatcher is ever called from within an action
-# (due to a DitsActionWait or something) things get really fouled up,
-# so we consider that a fatal error.
-_dispatcher_greenlet = None
+# Registered callbacks, {fd:func}.
+ _callbacks = {}
 
 # Logging config is left for the user
 #_log = _logging.getLogger(__name__)  # drama.__drama__, not great
@@ -207,42 +217,9 @@ class DramaException(Exception):
     '''Common base class for DITS exceptions'''
     pass
 
-
-class Kicked(DramaException):
-    '''Raised on DITS_REA_KICK, saves kick message.'''
-    def __init__(self, message):
-        self.message = message  # should be a Message() instance
-        self.args = (message,)
-
-
-class Died(DramaException):
-    '''Raised on DITS_REA_DIED, saves transaction object for dead task.'''
-    def __init__(self, transaction):
-        self.transaction = transaction  # should be a Transaction() instance
-        self.message = transaction
-        self.args = (transaction,)
-
-
-class Unexpected(DramaException):
-    '''Raised on unexpected/unhandled message, saves said message.'''
-    def __init__(self, message):
-        self.message = message  # should be a Message() instance
-        self.args = (message,)
-
-
-class Timeout(DramaException):
-    '''Raised when wait() times out, saves waited seconds + transactions.'''
-    def __init__(self, seconds=None, transactions=[]):
-        self.seconds = seconds
-        self.transactions = transactions
-        self.message = (seconds, transactions)
-        self.args = (seconds, transactions)
-
-
 class Exit(DramaException):
-    '''Raised by process_fd() for normal exit; standard string message.'''
+    '''Raise to cause task to exit'''
     pass
-
 
 class BadStatus(DramaException):
     '''
@@ -604,53 +581,6 @@ def set_param(name, value, drama=True, tide=False):
         SdsFreeId(newid, &status)
 
 
-class Fifo:
-    '''
-    Simple first-in, first-out queue.
-    Add newest item with 'push', retrieve oldest item with 'pop'.
-    Items are listed oldest to newest in string representation.
-    Amortized-constant push/pop, but no iteration or random access.
-    '''
-    
-    def __init__(self):
-        self._in = []
-        self._out = []
-    
-    def __repr__(self):
-        return 'Fifo(%s)' % str(list(reversed(self._out)) + self._in)
-    
-    def __len__(self):
-        return len(self._in) + len(self._out)
-    
-    def push(self, item):
-        '''Add newest item to the back of the Fifo.'''
-        self._in.append(item)
-    
-    def pop(self):
-        '''Remove and return oldest item from the front of the Fifo.'''
-        if not self._out:
-            self._out = self._in
-            self._out.reverse()
-            self._in = []
-        return self._out.pop()
-
-    def peek_newest(self):
-        '''Return (but do not remove) newest item from back of Fifo.'''
-        if self._in:
-            return self._in[-1]
-        return self._out[0]
-    
-    def peek_oldest(self):
-        '''Return (but do not remove) oldest item from front of Fifo.'''
-        if self._out:
-            return self._out[-1]
-        return self._in[0]
-
-    def clear(self):
-        '''Remove all items from Fifo, return nothing.'''
-        self.__init__()
-
-
 class Message:
     '''
     Message object holds entry parameters and action arguments.
@@ -744,516 +674,206 @@ class Message:
             self.arg_name, self.arg_list, self.arg_dict, self.arg_extra)
 
 
-def absolute_timeout(seconds):
+class TransId:
     '''
-    Given seconds, return an absolute timeout based on current time.time().
-    If seconds is None, return None.
-    If seconds is >10yr, assume it is already
-    an absolute timeout and return it unchanged.
+    TransId object holds a DitsTransIdType as a python integer.
+    Returned from OBEY and such.
+    You can wait() to invoke DitsActionTransIdWait.
     '''
-    if seconds is None:
-        return seconds
-    seconds = float(seconds)
-    if seconds > 315360000.0:  # 10 * 365 * 86400
-        return seconds
-    return _time.time() + seconds
-
-
-class Transaction:
-    '''
-    Base class for keeping track of ongoing DRAMA transactions.
-    Each instance gets copied to the current action's (greenlet's)
-    transaction dictionary.
-    
-    Instance attributes:
-        transid   int, transaction id (address)
-        running   bool, True while transaction in progress
-        status    int, completion status once running=False
-        messages  Fifo<Message>, queue of received messages
-    '''
-    
-    def __init__(self, transid, running=True):
-        '''
-        By default the Transaction starts with running=True,
-        but e.g. Monitors override this since they aren't
-        considered 'running' until they get a MONITOR_ID.
-        '''
+    def __init__(self, transid):
         self.transid = transid
-        self.running = running
-        self.status = 0
-        self.messages = Fifo()
-        _greenlet.getcurrent().transactions[self.transid] = self
-        _log.debug('created %s' % (self))
     
-    def __del__(self):
-        _log.debug('~%s' % (self))
-        if hasattr(self, 'messages') and self.messages:
-            _log.warn('unhandled messages in ~%s: %s' % (self, self.messages))
+    def __eq__(self, other):
+        self.transid == other
     
-    def __repr__(self):
-        return 'Transaction(0x%x)' % (self.transid)
-
-    def wait(self, secs=None):
-        '''Synonym for wait(secs, self)'''
-        return wait(secs, self)
-    
-    def join(self, timeout=None):
+    def wait(self, seconds=None, msg=''):
         '''
-        Wait for running==False.  'timeout' can be None (wait forever),
-        seconds to wait, or an absolute unix timestamp to wait until
-        (seconds since 19700101, like time.time()).
-        
-        BEWARE: This function calls wait(), which allows other actions
-        to run concurrently and can receive messages and raise exceptions
-        for ANY of your action's other running Transactions.
+        Wait up to 'seconds' for a message on this transid.
+        If 'seconds' is None (default), no timeout (wait forever).
+        On timeout, raise BadStatus(DITS__APP_TIMEOUT) with optional msg.
+        Return Message instance.
         '''
-        timeout = absolute_timeout(timeout)
-        while self.running:
-            wait(timeout, self)
+        cdef DitsTransIdType ctransid = self.transid
+        cdef DitsDeltaTimeType delay
+        cdef DitsDeltaTimeType *delayptr = NULL
+        cdef StatusType status = 0
+        cdef int count = 0
+        if msg:
+            msg = ': ' + msg
+        if seconds is not None:
+            s = int(seconds)
+            u = int(1e6*(seconds-s))
+            delayptr = &delay
+            DitsDeltaTime(s, u, delayptr)
+        DitsActionTransIdWait(0, delayptr, ctransid, &count, &status)
+        if status:
+            raise BadStatus(status, "DitsActionTransIdWait" + msg)
+        ret = Message()
+        if ret.reason == DITS_REA_RESCHED:
+            raise BadStatus(DITS__APP_TIMEOUT,
+                "DitsActionTransIdWait timeout after %g seconds" % (seconds) + msg)
+        return ret
 
 
-cdef DitsPathType get_path(object task, double timeout=10.0) except NULL:
+cdef class Path:
     '''
-    Get a Dits path to a task, waiting up to timeout secs for the Transaction.
-    Needed to replace jitPathGet, called inside most jit* functions,
-    since it calls ActionWait and creates nested dispatcher calls, very bad.
-    
-    Set timeout to 0.0 to prevent wait() entirely, raising BadStatus if
-    a valid path is not already cached.  Useful for Monitor.cancel(),
-    where calling wait() might not be safe.
-    
-    timeout can be absolute (seconds since 19700101), ala time.time().
-    Sorry, there's no 'wait forever' support for this function;
-    you'll have to settle for waiting a ridiculously long time.
-    
-    TODO: NULL is assumed to be an error value for path, but I might
-          need to change to 'except? NULL' or 'except *' if NULL is okay.
+    Path object holds a DitsPathType for internal use by obey etc.
     '''
-    cdef StatusType status = 0
-    cdef DitsPathType path = NULL
-    cdef DitsTransIdType transid
-    DitsPathGet(task, NULL, 0, NULL, &path, NULL, &status)
-    if status == 0:
-        return path
-    if timeout <= 0.0:
-        raise BadStatus(status, 'DitsPathGet(%s)' % (task))
-    ErsAnnul(&status)
-    DitsPathGet(task, NULL, 0, &_default_path_info, &path, &transid, &status)
-    if status != 0:
-        raise BadStatus(status, 'DitsPathGet(%s)' % (task))
-    t = Transaction(int(<ulong>transid))
-    t.join(timeout)
-    return path
+    cdef DitsPathType path
+    
+    def __cinit__(self, task, seconds=10.0):
+        cdef StatusType status = 0
+        cdef DitsTransIdType transid
+        self.path = NULL
+        DitsPathGet(task, NULL, 0, NULL, &self.path, NULL, &status)
+        if status == 0:
+            return
+        if timeout <= 0.0:
+            raise BadStatus(status, 'DitsPathGet(%s)' % (task))
+        ErsAnnul(&status)
+        DitsPathGet(task, NULL, 0, &_default_path_info, &self.path, &transid, &status)
+        if status != 0:
+            raise BadStatus(status, 'DitsPathGet(%s)' % (task))
+        t = TransId(int(<ulong>transid))
+        msg = t.wait(seconds, 'Path(%s)' % (task))
+        if msg.reason != DITS_REA_PATHFOUND:
+            raise BadStatus(DITS__APP_ERROR, 'Path(%s) unexpected message: %s' % (task, msg))
 
 
 def cache_path(taskname):
     '''
-    Calls get_path(taskname), returns nothing.  DRAMA will cache the path,
+    Calls Path(taskname), returns nothing.  DRAMA will cache the path,
     helping ensure that future calls to get_path with the same taskname
-    (such as in Obey, Monitor, etc) will return without calling wait().
+    will return without waiting.
     '''
-    get_path(taskname)
+    Path(taskname)
 
 
-class Signal(Transaction):
-    '''
-    Receives messages from peer actions, basically just a Transaction(0x0).
-    Create one of these in your action if you need to handle DITS_REA_ASTINT.
-    '''
-
-    def __init__(self):
-        # Make sure no duplicate Signal instances for this action
-        if _greenlet.getcurrent().transactions.has_key(0):
-            raise RuntimeError('Duplicate Signal() handler for this action.')
-        Transaction.__init__(self, 0)
-    
-    def __repr__(self):
-        return 'Signal()'
-
-
-class Obey(Transaction):
-    '''
-    Invokes an action and monitors its status.
-    Instance attributes (besides those from Transaction):
-        task        str,  name of target task
-        action      str,  name of target action
-        interested  bool, get DITS_REA_MESSAGE & DITS_REA_ERROR if True
-    '''
-    
-    def __init__(self, task, action, *args, **kwargs):
-        '''
-        Creates a Dits argument structure from *args and **kwargs,
-        resolves path, calls DitsObey, and inits Transaction(transid).
-        
-        WARNING, path resolution may call wait(10), which allows
-        other actions to run and can accept messages and raise exceptions
-        for ANY of your action's running Transactions.
-        '''
-        cdef StatusType status = 0
-        cdef DitsTransIdType transid
-        cdef DitsPathType path
-        self.task = task
-        self.action = action
-        self.interested = False
-        path = get_path(task)
-        argid = make_argument(*args, **kwargs)
-        DitsObey(path, action, argid, &transid, &status)
-        delete_sds(argid)
-        if status != 0:
-            raise BadStatus(status, "DitsObey(%s,%s,%d)" % \
-                                    (task, action, argid) )
-        Transaction.__init__(self, int(<ulong>transid))
-
-    def __repr__(self):
-        return 'Obey(%s.%s)' % (self.task, self.action)
-
-    def kick(self, *args, **kwargs):
-        '''
-        Kick the obeyed action with an argument created from *args/**kwargs.
-        Uses a NULL transid to avoid duplicate COMPLETE messages,
-        but note this means you will not get a MESREJECTED if the
-        action is not running.  Use the Kick class instead if you need to
-        be sure that the kick succeeds.
-        '''
-        cdef StatusType status = 0
-        cdef DitsPathType path
-        _log.debug('kicking %s' % (self))
-        path = get_path(self.task, 0.0)  # no wait() allowed here
-        argid = make_argument(*args, **kwargs)
-        DitsKick(path, self.action, argid, NULL, &status)
-        delete_sds(argid)
-        if status != 0:
-            raise BadStatus(status, "DitsKick(%s,%s,%d)" % \
-                            (self.task, self.action, argid) )
-
-    def set_interested(self, i=True):
-        '''
-        Express interest in MESSAGE and ERROR messages.
-        Calls DitsInterested if i==True (the default).
-        Never calls DitsNotInterested, since the Dits functions
-        are action-wide and other Obey instances might still
-        be interested, even if we're not.  Uninterested Obey instances
-        will have their MESSAGE and ERROR messages forwarded
-        on to the parent action using the forward() function.
-        '''
-        cdef StatusType status = 0
-        self.interested = bool(i)
-        if i:
-            DitsInterested(DITS_MSG_M_MESSAGE | DITS_MSG_M_ERROR, &status)
-            if status:
-                raise BadStatus(status, "DitsInterested("
-                                        "DITS_MSG_M_MESSAGE|DITS_MSG_M_ERROR")
-
-
-class Kick(Transaction):
-    '''
-    Kicks an action and watches transid for completion.
-    Instance attributes (besides those from Transaction):
-        task     str, name of target task
-        action   str, name of target action
-    '''
-    
-    def __init__(self, task, action, *args, **kwargs):
-        '''
-        Creates a Dits argument structure from *args and **kwargs,
-        resolves path, calls DitsKick, and inits Transaction(transid).
-        
-        WARNING, path resolution may call wait(10), which allows
-        other actions to run and can accept messages and raise exceptions
-        for ANY of your action's running Transactions.
-        '''
-        cdef StatusType status = 0
-        cdef DitsTransIdType transid
-        cdef DitsPathType path
-        self.task = task
-        self.action = action
-        path = get_path(task)
-        argid = make_argument(*args, **kwargs)
-        DitsKick(path, action, argid, &transid, &status)
-        delete_sds(argid)
-        if status != 0:
-            raise BadStatus(status, "DitsKick(%s,%s,%d)" % \
-                                    (task, action, argid) )
-        Transaction.__init__(self, int(<ulong>transid))
-
-    def __repr__(self):
-        return 'Kick(%s.%s)' % (self.task, self.action)
-
-
-class Monitor(Transaction):
-    '''
-    Creates DRAMA monitors and receives update messages.
-
-    The monitor is created with .running=False until a MONITOR_ID
-    message arrives.  This is done to give the user the option to
-    create multiple monitors and wait in parallel (and so Monitor.__init__
-    doesn't have to deal with possible exceptions that wait() might raise).
-    Like so:
-
-        monlist = [Monitor("TASK1", "PARAM1"),
-                   Monitor("TASK2", "PARAM2")]
-        while not all([x.running for x in monlist]):
-            wait(mon_timeout, [x for x in monlist if not x.running])
-            
-    Note that to cancel the monitor you need to explicitly cancel() it;
-    'del mymonitor' won't work because the action will retain a
-    reference to the monitor under the hood.  Again, canceling a monitor
-    leaves it in the .running=True state until a completion message arrives.
-
-    Monitors are always canceled automatically when an action returns,
-    with the final update/completion messages handled by the orphan
-    message handler so your action will not remain active in a
-    waiting state after you return from it.
-
-    If you monitor parameter _ALL_, current values will not be sent.  Also,
-    values from message_value()/value()/pop() will have a {name:value} format,
-    since _ALL_ basically puts individual monitors on all the top-level params.
-    If checking messages manually, msg.arg_name will hold the param name.
-    
-    Instance attributes (besides those from Transaction):
-        running  bool, True between MONITOR_ID and COMPLETE.
-        monid    int, used to cancel the monitor
-        task     str, name of target task
-        param    str, name of target SDP parameter
-    '''
-
-    def __init__(self, task, param):
-        '''
-        Resolves path, sends a START message, and inits Transaction.
-        
-        WARNING, path resolution may call wait(10), which allows
-        other actions to run and can accept messages and raise exceptions
-        for ANY of your action's running Transactions.
-        '''
-        cdef StatusType status = 0
-        cdef DitsTransIdType transid
-        cdef DitsPathType path
-        cdef DitsGsokMessageType message
-        self.monid = None
-        self.task = task
-        self.param = param
-        path = get_path(task)
-        argid = make_argument(param)
-        message.flags = DITS_M_ARGUMENT | DITS_M_REP_MON_LOSS #| DITS_M_SENDCUR
-        if param != "_ALL_":
-            message.flags |= DITS_M_SENDCUR
-        message.argument = argid
-        message.type = DITS_MSG_MONITOR
-        strcpy(message.name.n, "START")
-        DitsInitiateMessage(0, path, &transid, &message, &status)
-        delete_sds(argid)
-        if status != 0:
-            raise BadStatus(status, "DitsInitiateMessage(%s,%s)" % \
-                                    (self.task, param) )
-        Transaction.__init__(self, int(<ulong>transid), running=False)
-
-    def __del__(self):
-        Transaction.__del__(self)
-        self.cancel()
-
-    def __repr__(self):
-        return 'Monitor(%s.%s)' % (self.task, self.param)
-
-    def cancel(self):
-        '''
-        Sends a CANCEL message for this monitor, with NULL transid
-        to avoid duplicate messages.  The monitor will
-        continue to run until a completion message arrives.
-        '''
-        cdef StatusType status = 0
-        cdef DitsGsokMessageType message
-        cdef DitsPathType path
-        # order is important, self.running might not exist yet
-        if self.monid is not None and self.running:
-            _log.debug('canceling %s' % (self))
-            path = get_path(self.task, 0.0)  # no wait() allowed here
-            argid = make_argument(self.monid)
-            message.flags = DITS_M_ARGUMENT
-            message.argument = argid
-            message.type = DITS_MSG_MONITOR
-            strcpy(message.name.n, "CANCEL")
-            DitsInitiateMessage(0, path, NULL, &message, &status)
-            delete_sds(argid)
-            self.monid = None  # make sure we never try cancel again
-            if status != 0:
-                raise BadStatus(status, "DitsInitiateMessage(%s,%d)" % \
-                                        (self.task, self.monid) )
-
-    def raw_message_value(self, m):
-        '''
-        Given Message m, returns value from m.arg_list/m.arg_dict.
-        TODO: make static?
-        '''
-        if m is None:
-            return {}
-        if len(m.arg_list) == 1 and len(m.arg_dict) == 0:
-            return m.arg_list[0]
-        elif len(m.arg_list) == 0:
-            return m.arg_dict
-        # for anything else return an 'argument' structure.
-        arg = m.arg_dict.copy()
-        for i,v in enumerate(m.arg_list):
-            arg['Argument%d' % (i+1)] = v
-        return arg
-    
-    def message_value(self, m):
-        '''
-        Given Message m, return value from m.arg_list/m.arg_dict.
-        If self.param == _ALL_, return {m.arg_name: value}.
-        '''
-        value = self.raw_message_value(m)
-        if self.param == "_ALL_":
-            return {m.arg_name: value}
-        else:
-            return value
-    
-    def value(self):
-        '''
-        Return newest parameter value from self.messages.
-        No messages are removed from the queue.
-        TODO: Timeout + wait if no messages?  Currently will throw.
-        '''
-        return self.message_value(self.messages.peek_newest())
-    
-    def pop(self):
-        '''
-        Pop oldest message and return the parameter value.
-        This destroys the oldest message; only the value is returned.
-        TODO: Timeout + wait if no messages?  Currently will throw.
-        '''
-        return self.message_value(self.messages.pop())
-
-
-class Parameter(Transaction):
-    '''
-    Gets or sets SDP parameters in remote tasks,
-    depending on whether 'value' is supplied to __init__.
-    
-    Examples:
-        # simple synchronous get's
-        x = Parameter("TASK", "POS.X").value()  # no timeout
-        y = Parameter("TASK", "POS.Y").value(5) # 5s timeout
-        
-        # simple synchronous set's
-        Parameter("TASK", "POS.X", 42.0).join()  # no timeout
-        Parameter("TASK", "POS.Y", 53.0).join(5) # 5s timeout
-        
-        # asynchronous, multi-param get (TODO function for this)
-        params = ['X', 'Y', 'Z']
-        params = {p:Parameter("TASK", p) for p in params}
-        while any([p.running for p in params.values()]): wait()  # TODO func
-        params = {k:v.value() for k,v in params.items()}
-        x = params['X']
-        y = params['Y']
-        z = params['Z']
-    
-    Instance attributes (besides those from Transaction):
-        task       str, name of target task
-        param      str, name of target SDP parameter
-        type       str, 'get' or 'set'
-        _value     obj, from completion msg once value() called
-    
-    TODO: Can we get/set multiple parameters with a single transaction?
-    
-    NOTE: Setting parameters only seems to work for single values;
-          you cannot set entire structs or arrays.
-          The value you set will be coerced to the existing type;
-          you will get an error for invalid string->number conversions.
-          Setting struct array items like 's[1].value' will succeed,
-          but always raises SDS__NOITEM, which is terrible.
-          I cannot figure out how to set data array values at all.
-    '''
-    
-    def __init__(self, task, param, value=None):
-        '''
-        If value is None (the default), calls DitsGetParam, else DitsSetParam.
-        
-        WARNING, path resolution may call wait(10), which allows
-        other actions to run and can accept messages and raise exceptions
-        for ANY of your action's running Transactions.
-        '''
-        cdef StatusType status = 0
-        cdef DitsTransIdType transid
-        cdef DitsPathType path
-        self.task = task
-        self.param = param
-        path = get_path(task)
-        if value is None:
-            self.type = 'get'
-            func = 'DitsGetParam(%s,%s)' % (task, param)
-            DitsGetParam(path, param, &transid, &status)
-        else:
-            self.type = 'set'
-            func = 'DitsSetParam(%s,%s,%s)' % (task, param, value)
-            #argid = make_argument(value)
-            argid = sds_from_obj(value)
-            DitsSetParam(path, param, argid, &transid, &status)
-            delete_sds(argid)
-        if status:
-            raise BadStatus(status, func)
-        Transaction.__init__(self, int(<ulong>transid))
-    
-    def __repr__(self):
-        return 'Parameter(%s %s.%s)' % (self.type, self.task, self.param)
-    
-    def message_value(self, m):
-        '''
-        Given Message m, returns value from m.arg_list/m.arg_dict.
-        This function relies on self.param, so make sure to
-        only use it with this instance's own messages!
-        '''
-        if m is None:  # maybe if _ALL_ is empty?
-            return {}
-        # check for the expected case, arg_dict = {param:value}
-        if len(m.arg_dict) == 1 and len(m.arg_list) == 0 \
-            and (m.arg_dict.keys()[0] == self.param \
-                or self.param.endswith('.%s' % (m.arg_dict.keys()[0]))
-                or (self.param == '_NAMES_' and m.arg_dict.keys()[0] == 'Names')):
-            return m.arg_dict.values()[0]
-        # otherwise could be weird, return an 'argument' structure.
-        arg = m.arg_dict.copy()
-        for i,v in enumerate(m.arg_list):
-            arg['Argument%d' % (i+1)] = v
-        return arg
-        
-    def value(self, timeout=None):
-        '''
-        Waits up to timeout secs (or forever if None, the default)
-        for self.running to be False, then returns the value taken
-        from the completion message argument or raises Timeout.
-        
-        timeout can be absolute (seconds since 19700101) ala time.time().
-        
-        Caches the value as self._value for repeated calls.
-        
-        BEWARE: This function calls wait(), which allows other actions to run
-        and can receive messages and raise exceptions for ANY of your action's
-        running Transaction objects (Signal/Obey/Kick/Monitor/etc).
-        '''
-        if hasattr(self, '_value'):
-            return self._value
-        self.join(timeout)
-        m = None
-        while self.messages:
-            m = self.messages.pop()
-        if self.type == 'set':
-            self._value = None
-        else:
-            self._value = self.message_value(m)
-        return self._value
-
-
-def trigger(*args, **kwargs):
-    '''
-    Construct a Dits argument from *args/**kwargs and call
-    DitsTrigger to send a message to the parent action.
-    '''
+def obeykick_impl(o, tid, task, action, *args, **kwargs):
+    '''Invoke task:action with given args, transaction optional.'''
     cdef StatusType status = 0
+    cdef DitsTransIdType transid = 0
+    cdef DitsTransIdType *transidptr = NULL
+    if tid:
+        transidptr = &transid
+    p = Path(task)
     argid = make_argument(*args, **kwargs)
-    DitsTrigger(argid, &status)
+    if o:
+        what = 'DitsObey'
+        DitsObey(p.path, action, argid, transidptr, &status)
+    else:
+        what = 'DitsKick'
+        DitsKick(p.path, action, argid, transidptr, &status)
     delete_sds(argid)
     if status != 0:
-        raise BadStatus(status, "DitsTrigger(%d)" % (argid) )
+        raise BadStatus(status, what + "(%s,%s,%d)" % (task, action, argid))
+    return TransId(int(<ulong>transid))
+
+
+def obey(task, action, *args, **kwargs):
+    '''Invoke task:action with given args and return TransId.'''
+    return obeykick_impl(True, True, task, action, *args, **kwargs)
+
+
+def blind_obey(task, action, *args, **kwargs):
+    '''Invoke task:action with given args without creating a transaction.'''
+    obeykick_impl(True, False, task, action, *args, **kwargs)
+
+
+def kick(task, action, *args, **kwargs):
+    '''Kick task:action with given args and return a TransId.'''
+    return obeykick_impl(False, True, task, action, *args, **kwargs)
+
+
+def blind_kick(task, action, *args, **kwargs):
+    '''Kick task:action with given args and return a TransId.'''
+    obeykick_impl(False, False, task, action, *args, **kwargs)
+
+
+def interested():
+    '''Calls DitsInterested(DITS_MSG_M_MESSAGE | DITS_MSG_M_ERROR).'''
+    cdef StatusType status = 0
+    DitsInterested(DITS_MSG_M_MESSAGE | DITS_MSG_M_ERROR, &status)
+    if status:
+        raise BadStatus(status, "DitsInterested(DITS_MSG_M_MESSAGE|DITS_MSG_M_ERROR")
+
+
+def monitor(task, param):
+    '''Return a monitor TransId on task:param.
+    
+    You can save the MONITOR_ID so you can cancel() it later,
+    or you can just let the dispatcher cancel the monitor automatically
+    when the action ends:
+    
+    if msg.reason == DITS_REA_OBEY:
+        monid = None
+        montid = monitor('TASK', 'PARAM')
+    elif msg.reason == DITS_REA_TRIGGER:
+        if msg.status == DITS__MON_STARTED:
+            if msg.transid == montid
+                monid = msg.arg_dict['MONITOR_ID']
+        elif msg.status == DITS__MON_CHANGED:
+            ...
+    elif msg.reason == DITS_REA_KICK:
+        cancel('TASK', monid)
+        monid = None
+    elif msg.reason == DITS_REA_COMPLETE:
+        if msg.transid == montid
+            monid = None
+    '''
+    cdef StatusType status = 0
+    cdef DitsTransIdType transid
+    cdef DitsGsokMessageType message
+    p = Path(task)
+    argid = make_argument(param)
+    message.flags = DITS_M_ARGUMENT | DITS_M_REP_MON_LOSS #| DITS_M_SENDCUR
+    if param != "_ALL_":
+        message.flags |= DITS_M_SENDCUR
+    message.argument = argid
+    message.type = DITS_MSG_MONITOR
+    strcpy(message.name.n, "START")
+    DitsInitiateMessage(0, p.path, &transid, &message, &status)
+    delete_sds(argid)
+    if status != 0:
+        raise BadStatus(status, "DitsInitiateMessage(%s,%s)" % (self.task, param))
+    return TransId(int(<ulong>transid))
+
+
+def cancel(task, monid):
+    '''Send a CANCEL message for the given MONITOR_ID.  No transaction.'''
+    if monid is None:
+        return
+    cdef StatusType status = 0
+    cdef DitsGsokMessageType message
+    p = Path(task)
+    argid = make_argument(monid)
+    message.flags = DITS_M_ARGUMENT
+    message.argument = argid
+    message.type = DITS_MSG_MONITOR
+    strcpy(message.name.n, "CANCEL")
+    DitsInitiateMessage(0, p.path, NULL, &message, &status)
+    delete_sds(argid)
+    if status != 0:
+        raise BadStatus(status, "DitsInitiateMessage(%s,%d)" % (task, monid))
+    # remove the monitor from the global list (regardless of calling action).
+    # and in fact remove all instances from all lists, because paranoia.
+    for mlist in _monitors.values():
+        try:
+            while True:
+                mlist.remove((task, monid))
+        except:
+            pass
+
+
+def get(task, param):
+    '''Return a TransId for param in remote task.'''
+    cdef StatusType status = 0
+    cdef DitsTransIdType transid
+    p = Path(task)
+    DitsGetParam(p.path, param, &transid, &status)
+    if status != 0:
+        raise BadStatus(status, 'DitsGetParam(%s,%s)' % (task, param))
+    return TransId(int(<ulong>transid))
 
 
 def signal(action, *args, **kwargs):
@@ -1266,60 +886,7 @@ def signal(action, *args, **kwargs):
     DitsSignalByName(action, argid, &status)
     delete_sds(argid)
     if status != 0:
-        raise BadStatus(status, "DitsSignalByName(%s,%d)" % (action, argid) )
-
-
-def blind_kick(task, action, *args, **kwargs):
-    '''
-    Construct a Dits argument from *args/**kwargs and call
-    DitsKick on task.action using a NULL transid.
-    Use it when:
-     - you did not start the action yourself (use Obey.kick() instead)
-     - you don't care if the target action is running (no MESREJECTED)
-     - you don't care when the target action completes (no COMPLETE)
-     - you are planning on sending numerous kicks to a long-running
-       action as part of a custom communication scheme and you don't
-       want to leak a bunch of transactions (since kick transactions
-       stick around until the target task completes).
-
-    Use the Kick class instead if you want to keep track of your kick.
-    
-    WARNING, path resolution may call wait(10), which allows
-        other actions to run and can accept messages and raise exceptions
-        for ANY of your action's running Transactions.
-    '''
-    cdef StatusType status = 0
-    cdef DitsPathType path
-    path = get_path(task)
-    argid = make_argument(*args, **kwargs)
-    DitsKick(path, action, argid, NULL, &status)
-    delete_sds(argid)
-    if status != 0:
-        raise BadStatus(status, "DitsKick(%s,%s,%d)" % (task, action, argid) )
-
-
-def blind_obey(task, action, *args, **kwargs):
-    '''
-    Construct a Dits argument from *args/**kwargs and call
-    DitsObey on task.action using a NULL transid.
-    Use it when:
-     - you don't care about success, failure, completion
-     - you need to start a local action before entering the main loop
-    
-    Use the Obey class instead if you want to keep track of your obey.
-    
-    WARNING, path resolution may call wait(10), which allows
-        other actions to run and can accept messages and raise exceptions
-        for ANY of your action's running Transactions.
-    '''
-    cdef StatusType status = 0
-    cdef DitsPathType path
-    path = get_path(task)
-    argid = make_argument(*args, **kwargs)
-    DitsObey(path, action, argid, NULL, &status)
-    delete_sds(argid)
-    if status != 0:
-        raise BadStatus(status, "DitsObey(%s,%s,%d)" % (task, action, argid) )
+        raise BadStatus(status, "DitsSignalByName(%s,%d)" % (action, argid))
 
 
 def is_active(task, action, timeout=None):
@@ -1327,6 +894,9 @@ def is_active(task, action, timeout=None):
     Return True if task:action is active, else False.
     For local task, uses DitsActIndexByName + DitsIsActionActive;
     For remote tasks, queries task:HELP for " action (Active)".
+    
+    NOTE: This calls interested(), which can result in extra
+        MESSAGE/ERROR messages from other transactions.
     
     NOTE: HELP can return a LOT of messages,
           make sure your buffers are big enough
@@ -1344,24 +914,24 @@ def is_active(task, action, timeout=None):
             raise BadStatus(status, "DitsActIndexByName(%d (%s))" % (index, action))
         return bool(active)
     needle = " %s (Active)" % (action)
-    o = Obey(task, "HELP")
-    o.set_interested(True)
-    o.join(timeout)
-    while o.messages:
-        m = o.messages.pop()
-        tn = m.arg_dict["TASKNAME"]
+    tid = obey(task, "HELP")
+    interested()
+    found = False
+    while True:
+        m = tid.wait(timeout, 'is_active(%s,%s)' % (task, action))
+        if m.reason != DITS_REA_MESSAGE:
+            break
+        tn = m.arg_dict['TASKNAME']
         msg = m.arg_dict["MESSAGE"][0]  # MESSAGE is array of |S200
-        if tn == task and msg.find(needle) >= 0:
-            o.messages.clear()
-            return True
-    return False
-
+        found = tn == task and msg.find(needle) >= 0
+    return found
+    
 
 def forward():
     '''
     Call MyMsgForward from local ditsmsg.h to relay the
-    current message to the action's parent.  Only intended
-    for use by _wait() to handle uninteresting messages
+    current message to the action's parent.  Intended
+    to handle uninteresting messages
     of the DITS_REA_MESSAGE and DITS_REA_ERROR variety.
     '''
     cdef StatusType status = 0
@@ -1438,179 +1008,33 @@ def ersout(e):
                                   'STATUS': [_numpy.int32(0)]} )
 
 
-def _wait(secs):
+def reschedule(seconds=None):
     '''
-    Main interface for yielding control back to DRAMA.
-    Sleeps up to 'secs' seconds (or forever if None) until a message arrives.
-    'secs' can also be an absolute timeout, seconds since 19700101.
-    Updates and returns the associated Transaction object.
-    Raises:
-        Timeout    on RESCHED
-        Kicked     on KICK
-        Died       on DIED  (TODO if transid 0x0 is parent, raise Died('TASK').
-        BadStatus  on MESREJECTED
-        BadStatus  on COMPLETE w/bad status
-        Unexpected on TRIGGER if no monitor/obey handler.
-        Unexpected if no transaction found
-        Unexpected on other reasons
+    Reschedule the action using DitsPutRequest or jitDelayRequest.
+    if seconds is None, DITS_REQ_SLEEP (wait for message)
+    if seconds <= 0, DITS_REQ_STAGE (reschedule immediately)
+    Otherwise call jitDelayRequest.
+    'seconds' can be an absolute or relative timeout.
     '''
     cdef StatusType status = 0
-    g = _greenlet.getcurrent()
-    transactions = g.transactions
-    
-    until = absolute_timeout(secs)
-    obj = None
-    first = True
-    
-    while obj is None:  # loop while ignoring/forwarding messages
-
-        if secs is None:
-            DitsPutRequest(DITS_REQ_SLEEP, &status)
+    if seconds is None:
+        DitsPutRequest(DITS_REQ_SLEEP, &status)
+    else:
+        s = float(seconds)
+        if s > 315360000.0:  # 10*365*86400
+            s = s - _time.time()
+        if s <= 0.0:
+            DitsPutRequest(DITS_REQ_STAGE, &status)
         else:
-            if first:  # try to avoid instant timeout for tiny secs
-                s = float(secs)
-                if s > 315360000.0:  # 10*365*86400
-                    s = s - _time.time()
-            else:
-                s = until - _time.time()
-            if s <= 0.0:
-                raise Timeout(secs)
             jitDelayRequest(s, &status)
-        
-        first = False
-
-        # return control to DRAMA and wait for next message
-        _log.debug("_wait: switching from greenlet %s to parent %s" % (g, g.parent))
-        msg = g.parent.switch()
-        _log.debug("_wait: switch returned %s" % (msg))
-
-        try:
-            if msg.reason == DITS_REA_RESCHED:
-                raise Timeout(secs)
-            elif msg.reason == DITS_REA_KICK:
-                raise Kicked(msg)
-            elif msg.reason == DITS_REA_ASTINT:
-                # signal from peer, get Signal instance to pass this to
-                obj = transactions[0]
-                obj.messages.push(msg)
-            elif msg.reason == DITS_REA_COMPLETE \
-                 or msg.reason == DITS_REA_DIED \
-                 or msg.reason == DITS_REA_MESREJECTED \
-                 or msg.reason == DITS_REA_PATHFOUND \
-                 or msg.reason == DITS_REA_PATHFAILED:
-                # find the matching transaction handler
-                obj = transactions[msg.transid]
-                obj.running = False
-                obj.status = msg.status
-                # might be a parameter message, push if args
-                if msg.arg_list or msg.arg_dict:
-                    obj.messages.push(msg)
-                del transactions[msg.transid]  # transaction complete
-                if msg.reason == DITS_REA_DIED:
-                    raise Died(obj)
-                if msg.reason == DITS_REA_PATHFAILED:
-                    msg.status = msg.status or DITS__INVPATH
-                if msg.status != 0:
-                    raise BadStatus(msg.status, obj)
-            elif msg.reason == DITS_REA_TRIGGER:
-                # find the matching transaction handler
-                obj = transactions[msg.transid]
-                if msg.status == DITS__MON_STARTED:
-                    obj.monid = int(msg.arg_dict['MONITOR_ID'])
-                    obj.running = True
-                elif msg.status == DITS__MON_CHANGED or isinstance(obj, Obey):
-                    obj.messages.push(msg)
-                else:
-                    raise Unexpected(msg)
-            elif msg.reason == DITS_REA_MESSAGE \
-                 or msg.reason == DITS_REA_ERROR:
-                # find matching Obey, see if it wants this message
-                obj = transactions[msg.transid]
-                if obj.interested:
-                    obj.messages.push(msg)
-                else:
-                    obj = None
-                    forward()
-            else:
-                raise Unexpected(msg)
-        except KeyError:  # failed to find an object for this message
-            raise Unexpected(msg)
-    
-    return obj
-
-
-def delay(secs):
-    '''
-    Wait 'secs' seconds for a RESCHED, regardless of any other messages
-    that arrive in the meantime.  Use this instead of time.sleep()
-    to maintain concurrency with other actions.
-    'secs' can be an absolute timeout, seconds since 19700101.
-    '''
-    until = absolute_timeout(float(secs))  # cannot be None
-    try:
-        _wait(secs)  # try to avoid instant timeout for tiny secs
-        while True:
-            _wait(until)  # now use the absolute timeout
-    except Timeout:
-        pass
-
-
-def wait(secs=None, objs=None):
-    '''
-    Wait up to 'secs' (or forever if None) for messages affecting one of
-    'objs' (or any if None) and return the affected object.
-    'secs' can be an absolute timeout, seconds since 19700101.
-    Note that this function can raise exceptions for any transactions
-    started by the current action, not just those in 'objs'.
-    Raises:
-        Timeout    on RESCHED
-        Kicked     on KICK
-        Died       on DIED
-        BadStatus  on MESREJECTED
-        BadStatus  on COMPLETE w/bad status
-        Unexpected on TRIGGER if no monitor/obey handler.
-        Unexpected if no transaction found
-        Unexpected on other reasons
-    '''
-    if objs is None or objs is False or objs is 0:
-        objs = []
-    elif not hasattr(objs, '__iter__'):
-        objs = [objs]
-    for o in objs:
-        if not isinstance(o, Transaction):
-            raise TypeError('bad wait type ' + str(type(o)))
-    
-    until = absolute_timeout(secs)
-    try:
-        obj = _wait(secs)  # try to avoid instant timeout for tiny secs
-        while objs and obj not in objs:
-            obj = _wait(until)  # now use the absolute timeout
-    except Timeout:
-        raise Timeout(secs, objs)
-    return obj
+    if status != 0:
+        raise BadStatus(status, 'reschedule(%s)' % (seconds))
+    _rescheduled[-1] = True
 
 
 cdef void dispatcher(StatusType *status):
     '''C entry point for all registered DRAMA actions.'''
     cdef StatusType tstatus = 0
-    
-    # make sure dispatcher is never called from an action context
-    global _dispatcher_greenlet
-    if _dispatcher_greenlet is None:
-        _dispatcher_greenlet = _greenlet.getcurrent()
-    elif _dispatcher_greenlet != _greenlet.getcurrent():
-        status[0] = DITS__APP_ERROR
-        #DitsPutRequest(DITS_REQ_EXIT, &tstatus)  # doesn't work
-        DitsPutRequest(DITS_REQ_END, &tstatus)
-        blind_obey(_taskname, "EXIT")
-        act = 'unknown'
-        for n,v in _greenlets.iteritems():
-            if v == _greenlet.getcurrent():
-                act = n
-                break
-        _log.critical("dispatcher called from %s action greenlet, %s" % \
-                      (act, _greenlet.getcurrent()))
-        return
     
     # bad entry status or failing to get entry details is a FATAL error
     n = None  # action name (msg.name), used frequently
@@ -1637,18 +1061,17 @@ cdef void dispatcher(StatusType *status):
             blind_obey(_taskname, "EXIT")
             return
     
-    # create new or reenter old greenlet for action; handle errors and cleanup.
+    # intercept MON_STARTED to update global _monitors
+    if msg.reason == DITS_REA_TRIGGER \
+        and msg.status == DITS__MON_STARTED \
+        and 'MONITOR_ID' in msg.arg_dict:
+        if not n in _monitors:
+            _monitors[n] = []
+        _monitors[n].append((msg.task, msg.arg_dict['MONITOR_ID']))
+    
     try:
-        if msg.reason == DITS_REA_OBEY:
-            g = _greenlet.greenlet(_actions[n])
-            _greenlets[n] = g
-            g.transactions = {}
-            _log.debug("dispatcher switching to new %s greenlet %s" % (n, g))
-            r = g.switch(*msg.arg_list, **msg.arg_dict)
-        else:
-            g =  _greenlets[n]
-            _log.debug("dispatcher switching to %s greenlet %s" % (n, g))
-            r = g.switch(msg)
+        _rescheduled.append(False)
+        r = _actions[n](msg)
         if r is not None:  # action returned a value
             if isinstance(r, tuple):
                 a = make_argument(*r)  # {'Argument1':r[0], 'Argument2':r[1], ...}
@@ -1659,12 +1082,6 @@ cdef void dispatcher(StatusType *status):
             DitsPutArgument(a, DITS_ARG_DELETE, status)
             if status[0]:
                 raise BadStatus(status[0], "DitsPutArgument(%s)" % (r))
-    except (Kicked, Died, Unexpected):
-        status[0] = DITS__UNEXPMSG
-        _log.exception('%s: unexpected entry reason' % (n))
-    except Timeout:
-        status[0] = DITS__APP_TIMEOUT
-        _log.exception('%s: timeout' % (n))
     except (TypeError, ValueError):
         status[0] = DITS__INVARG
         _log.exception('%s: invalid argument' % (n))
@@ -1672,30 +1089,26 @@ cdef void dispatcher(StatusType *status):
         status[0] = e.status or DITS__APP_ERROR
         _log.exception('%s: bad status' % (n))
     except Exit as e:
+        status[0] = DITS__EXITHANDLER
         _log.debug('%s: %s' % (n, repr(e)))
-        #DitsPutRequest(DITS_REQ_EXIT, &tstatus)  # doesn't work
-        DitsPutRequest(DITS_REQ_END, &tstatus)
-        blind_obey(_taskname, "EXIT")
-        return
+        blind_obey(_taskname, "EXIT")  # DITS_REQ_EXIT doesn't work
     except:
         status[0] = DITS__APP_ERROR
         _log.exception('%s: other error' % (n))
     finally:
-        g = _greenlets.get(n, None)
-        if status[0] != 0 or (g is not None and g.dead):
+        if status[0] != 0:
             DitsPutRequest(DITS_REQ_END, &tstatus)
-            if g is not None:
-                for m in g.transactions.values():
-                    if isinstance(m, Monitor):
-                        try:
-                            m.cancel()
-                        except:
-                            _log.exception('%s: error canceling %s' % (n, m))
-                _log.debug("dispatcher: destroying %s greenlet %s" % (n, g))
-                g.throw()  # raises GreenletExit to kill the greenlet
-                del _greenlets[n]
-                del g.transactions
-                del g
+            rescheduled[-1] = False
+        if not _rescheduled[-1] and n in _monitors:
+            mlist = _monitors[n]
+            while mlist:
+                try:
+                    task, monid = mlist.pop()
+                    cancel(task, monid)
+                except:
+                    pass
+            del _monitors[n]
+        _rescheduled.pop()
 
 
 cdef void orphan_handler(StatusType *status):
@@ -1777,10 +1190,9 @@ def init( taskname,
     if status != 0:
         raise BadStatus(status, "jitAppInit(%s)" % (taskname) )
     # special flag that it is safe to call jitStop() now
-    global _fd, _taskname, _dispatcher_greenlet
+    global _fd, _taskname
     _fd = -2
     _taskname = taskname
-    _dispatcher_greenlet = None
 
     DitsPutOrphanHandler(orphan_handler, &status)
     if status != 0:
@@ -1982,25 +1394,19 @@ def stop(taskname=None):
     from the IMP network system; a finally: block is a good place for it.
     '''
     cdef StatusType status = 0
-    global _taskname, _altin, _fd, _greenlets, _callbacks, _actions
+    global _taskname, _altin, _fd, _callbacks, _actions, _monitors
     
-    if _greenlet.getcurrent() in _greenlets.values():
+    if _rescheduled:
         raise Exit('stop')
     
-    # Make sure all greenlets are dead so they don't continue
-    # to hold refs to user resources.  We also cancel any
-    # outstanding Monitor instances before jitStop().
-    for n,g in _greenlets.items():
-        _log.debug('stop: canceling monitors in %s' % (n))
-        for m in g.transactions.values():
-            if isinstance(m, Monitor):
-                try:
-                    m.cancel()
-                except:
-                    e = _sys.exc_info()[1]
-                    _log.warn('stop: error canceling %s: %s' % (m, repr(e)))
-        _log.debug('stop: killing greenlet %s' %  (n))
-        g.throw()  # raises GreenletExit
+    for mlist in _monitors.values():
+        while mlist:
+            try:
+                task, monid = mlist.pop()
+                cancel(task, monid)
+            except:
+                pass
+    _monitors = {}
     
     # Must clean up _altin manually; tideExit() is not enough.
     if _altin:
@@ -2025,7 +1431,6 @@ def stop(taskname=None):
             _log.warn('%s' % (bs))
     
     # Clean up remaining globals.
-    _greenlets = {}
     _callbacks = {}
     _actions = {}
 

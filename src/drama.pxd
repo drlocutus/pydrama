@@ -247,6 +247,7 @@ cdef extern from "DitsTypes.h":
         DITS_REQ_SLEEP
         DITS_REQ_END
         DITS_REQ_EXIT
+        DITS_REQ_STAGE
     ctypedef DitsReqEnum DitsReqType
     
     enum DitsArgFlagEnum:
@@ -382,6 +383,9 @@ cdef extern from "DitsInteraction.h":
 
 cdef extern from "DitsFix.h":
 
+    ctypedef struct DitsDeltaTimeType:
+        pass
+
     SdsIdType DitsGetArgument()
     
     void DitsPutArgument(SdsIdType arg, DitsArgFlagType flag, StatusType *status)
@@ -389,6 +393,8 @@ cdef extern from "DitsFix.h":
     void DitsGetName(int namelen, char *action_name, StatusType *status)
 
     void DitsPutRequest(DitsReqType req, StatusType *status)
+    
+    void DitsDeltaTime(unsigned int secs, unsigned int microsecs, DitsDeltaTimeType *delay)
 
 cdef extern from "DitsSignal.h":
 
@@ -423,6 +429,7 @@ cdef extern from "Dits_Err.h":
         DITS__INVARG
         DITS__INVPATH
         DITS__UNEXPMSG
+        DITS__EXITHANDLER
 
 
 cdef extern from "Ers.h":
