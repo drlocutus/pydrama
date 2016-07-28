@@ -89,7 +89,7 @@ _monitors = {}
 _actions = {}
 
 # Registered callbacks, {fd:func}.
- _callbacks = {}
+_callbacks = {}
 
 # Logging config is left for the user
 #_log = _logging.getLogger(__name__)  # drama.__drama__, not great
@@ -693,7 +693,7 @@ class TransId:
         On timeout, raise BadStatus(DITS__APP_TIMEOUT) with optional msg.
         Return Message instance.
         '''
-        cdef DitsTransIdType ctransid = self.transid
+        cdef DitsTransIdType ctransid = <DitsTransIdType>(<ulong>self.transid)
         cdef DitsDeltaTimeType delay
         cdef DitsDeltaTimeType *delayptr = NULL
         cdef StatusType status = 0
@@ -728,7 +728,7 @@ cdef class Path:
         DitsPathGet(task, NULL, 0, NULL, &self.path, NULL, &status)
         if status == 0:
             return
-        if timeout <= 0.0:
+        if seconds <= 0.0:
             raise BadStatus(status, 'DitsPathGet(%s)' % (task))
         ErsAnnul(&status)
         DitsPathGet(task, NULL, 0, &_default_path_info, &self.path, &transid, &status)
@@ -752,7 +752,7 @@ def cache_path(taskname):
 def obeykick_impl(o, tid, task, action, *args, **kwargs):
     '''Invoke task:action with given args, transaction optional.'''
     cdef StatusType status = 0
-    cdef DitsTransIdType transid = 0
+    cdef DitsTransIdType transid = NULL
     cdef DitsTransIdType *transidptr = NULL
     if tid:
         transidptr = &transid
@@ -835,7 +835,7 @@ def monitor(task, param):
     DitsInitiateMessage(0, p.path, &transid, &message, &status)
     delete_sds(argid)
     if status != 0:
-        raise BadStatus(status, "DitsInitiateMessage(%s,%s)" % (self.task, param))
+        raise BadStatus(status, "DitsInitiateMessage(%s,%s)" % (task, param))
     return TransId(int(<ulong>transid))
 
 
@@ -1098,7 +1098,7 @@ cdef void dispatcher(StatusType *status):
     finally:
         if status[0] != 0:
             DitsPutRequest(DITS_REQ_END, &tstatus)
-            rescheduled[-1] = False
+            _rescheduled[-1] = False
         if not _rescheduled[-1] and n in _monitors:
             mlist = _monitors[n]
             while mlist:
@@ -1136,7 +1136,7 @@ cdef void orphan_handler(StatusType *status):
 
 
 def init( taskname,
-          flags = DITS_M_X_COMPATIBLE | DITS_M_IMB_ROUND_ROBIN,
+          flags = DITS_M_X_COMPATIBLE, # | DITS_M_IMB_ROUND_ROBIN,  # RR not in Hilo yet
           buffers = [32000, 8000, 8000, 2000],
           tidefile = None,
           actions = [] ):
