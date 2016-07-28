@@ -380,6 +380,10 @@ cdef extern from "DitsInteraction.h":
                       DitsTransIdType *transid, StatusType *status)
 
     void DitsInterested(DitsMsgMaskType mask, StatusType *status)
+    
+    void DitsActionTransIdWait(int flags, DitsDeltaTimeType *delay,
+                               DitsTransIdType transId,
+                               int *count, StatusType *status)
 
 cdef extern from "DitsFix.h":
 
