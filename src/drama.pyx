@@ -721,7 +721,7 @@ cdef class Path:
     '''
     cdef DitsPathType path
     
-    def __cinit__(self, task, seconds=10.0):
+    def __cinit__(self, task, seconds=0.1):
         cdef StatusType status = 0
         cdef DitsTransIdType transid
         self.path = NULL
