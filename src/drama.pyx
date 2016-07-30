@@ -5,31 +5,31 @@ DRAMA Python module.
 Author: Ryan Berthold, JAC
 
 A note on logging/debug output:
-    
+
     This module uses the standard python 'logging' module, not jitDebug.
     It uses __name__ for the logger name, which should be 'drama'.
     A NullHandler is installed, so you don't need to configure logging
     if you don't want to.
-    
+
     For a basic logging config that ignores all the debug output
     from this module, logs to a file in /jac_logs/YYYYMMDD,
     and sends INFO to MsgOut and >=WARN to ErsOut, try:
-    
+
         import drama.log
         drama.log.setup('MYTASKNAME')
-    
+
     Note that logging calls explicitly list their function context
     instead of relying on on '%(funcName)s' in the handler format;
     this is due to an apparent bug in cython extension modules
     that causes '%(funcName)s' to produce '<module>' instead of
     something useful.  Users are advised to do the same in their own code
     instead of using the '%(funcName)s' format.
-    
+
     Note also that this module expects a MsgOutHandler to be installed
     so that any errors will be properly sent to the calling task;
     the module never makes any explicit MsgOut/ErsOut/ErsRep calls of its own.
-    
-     
+
+
 TODO: tideSetParam for pushing parameter updates back to EPICS space.
 
 -------------------------------
@@ -44,7 +44,7 @@ User will have to do their own entry-reason checks and such.
 It'd be nice to get rid of numpy reliance too.
 
 Another thing that might be slowing us down is constant creation/destruction
-of SDS parameters vs updating existing structures.  
+of SDS parameters vs updating existing structures.
 
 '''
 
@@ -159,6 +159,36 @@ _dtype_to_sds_code = {
 #    '<u8': SDS_UI64
 #}
 
+# expose constants to python
+REA_OBEY             = DITS_REA_OBEY
+REA_KICK             = DITS_REA_KICK
+REA_RESCHED          = DITS_REA_RESCHED
+REA_TRIGGER          = DITS_REA_TRIGGER
+REA_ASTINT           = DITS_REA_ASTINT
+REA_LOAD             = DITS_REA_LOAD
+REA_LOADFAILED       = DITS_REA_LOADFAILED
+REA_MESREJECTED      = DITS_REA_MESREJECTED
+REA_COMPLETE         = DITS_REA_COMPLETE
+REA_DIED             = DITS_REA_DIED
+REA_PATHFOUND        = DITS_REA_PATHFOUND
+REA_PATHFAILED       = DITS_REA_PATHFAILED
+REA_MESSAGE          = DITS_REA_MESSAGE
+REA_ERROR            = DITS_REA_ERROR
+REA_EXIT             = DITS_REA_EXIT
+REA_NOTIFY           = DITS_REA_NOTIFY
+REA_BULK_TRANSFERRED = DITS_REA_BULK_TRANSFERRED
+REA_BULK_DONE        = DITS_REA_BULK_DONE
+
+APP_ERROR     = DITS__APP_ERROR
+APP_TIMEOUT   = DITS__APP_TIMEOUT
+MON_STARTED   = DITS__MON_STARTED
+MON_CHANGED   = DITS__MON_CHANGED
+NOTUSERACT    = DITS__NOTUSERACT
+INVARG        = DITS__INVARG
+INVPATH       = DITS__INVPATH
+UNEXPMSG      = DITS__UNEXPMSG
+EXITHANDLER   = DITS__EXITHANDLER
+
 _entry_reason_string = {
     DITS_REA_OBEY:             "DITS_REA_OBEY",
     DITS_REA_KICK:             "DITS_REA_KICK",
@@ -190,7 +220,7 @@ def errors_from_header(filename):
     as a dictionary; use when raising a BadStatus exception.
     This is intended as a convenience function for other tasks
     and modules; it is not used by this module directly.
-    
+
     TODO: raise an error on empty dict?
     '''
     d = {}
@@ -233,7 +263,7 @@ class BadStatus(DramaException):
         if status != 0:
             raise BadStatus(status, 'jitAppInit("%s")' % (taskname))
     '''
-    
+
     def __init__(self, status, message):
         '''Create BadStatus with numeric status and descriptive message.'''
         self.status = status
@@ -294,7 +324,7 @@ cdef SdsIdType _sds_from_obj(object obj, char* name="", SdsIdType pid=0):
         if status != 0:
             raise BadStatus(status, "SdsNew(%d,%s,SDS_INT)" % (pid,name))
         return id
-        
+
     if isinstance(obj, dict):
         SdsNew(pid, name, 0, NULL, SDS_STRUCT, 0, NULL, &id, &status)
         if status != 0:
@@ -334,7 +364,7 @@ cdef SdsIdType _sds_from_obj(object obj, char* name="", SdsIdType pid=0):
     # reverse numpy dim order for dits
     for i in xrange(len(shape)):
         cdims[i] = shape[-(1+i)]
-    
+
     if dtype == 'object':
     #if dtype.startswith("|O"):
         # make sure every item is a dict
@@ -397,7 +427,7 @@ cdef object _obj_from_sds(SdsIdType id):
 
     if id == 0:
         return None
-    
+
     name, code, dims = sds_info(id)
 
     # dits dim/index ordering is reversed vs numpy.
@@ -527,7 +557,7 @@ def parse_argument(arg):
 def get_param(name):
     '''
     Get a named value from the task's SDP parameter system.
-    
+
     NOTE: This only works correctly for top-level params;
           trying to get MYSTRUCT.MYFIELD results in 'No such item'.
           TODO: Check name?
@@ -548,7 +578,7 @@ def set_param(name, value, drama=True, tide=False):
     Set a named value in the task's SDP parameter system.
     If drama=True, calls SdpUpdate() to update monitors.
     If tide=True, calls tideSetParam to update EPICS.
-    
+
     NOTE: This only works correctly for top-level params;
           trying to set MYSTRUCT.MYFIELD will screw up.
           TODO: Check name and enforce.
@@ -597,7 +627,7 @@ class Message:
         arg_dict  {}, keyword args from DitsGetArgument()
         arg_extra str, arg string from SdsGetExtra(DitsGetArgument())
     '''
-    
+
     def __init__(self):
         '''Constructs a Message object from Dits entry parameters.'''
         cdef StatusType status = 0
@@ -640,7 +670,7 @@ class Message:
         # get message argument, separate positional/keyword parameters
         argid = DitsGetArgument()
         arg = obj_from_sds(argid)
-        
+
         self.arg_name = None
         self.arg_extra = None
         if argid != 0:
@@ -650,7 +680,7 @@ class Message:
                 raise BadStatus(status, "SdsGetExtra(%d)" % (argid))
             if extra_len != 0:
                 self.arg_extra = str(extra)
-            
+
         # fill in the Message instance
         self.time = _time.time()
         self.entry = str(ent_name)
@@ -682,10 +712,10 @@ class TransId:
     '''
     def __init__(self, transid):
         self.transid = transid
-    
+
     def __eq__(self, other):
         self.transid == other
-    
+
     def wait(self, seconds=None, msg=''):
         '''
         Wait up to 'seconds' for a message on this transid.
@@ -720,7 +750,7 @@ cdef class Path:
     Path object holds a DitsPathType for internal use by obey etc.
     '''
     cdef DitsPathType path
-    
+
     def __cinit__(self, task, seconds=0.1):
         cdef StatusType status = 0
         cdef DitsTransIdType transid
@@ -800,11 +830,11 @@ def interested():
 
 def monitor(task, param):
     '''Return a monitor TransId on task:param.
-    
+
     You can save the MONITOR_ID so you can cancel() it later,
     or you can just let the dispatcher cancel the monitor automatically
     when the action ends:
-    
+
     if msg.reason == DITS_REA_OBEY:
         monid = None
         montid = monitor('TASK', 'PARAM')
@@ -894,10 +924,10 @@ def is_active(task, action, timeout=None):
     Return True if task:action is active, else False.
     For local task, uses DitsActIndexByName + DitsIsActionActive;
     For remote tasks, queries task:HELP for " action (Active)".
-    
+
     NOTE: This calls interested(), which can result in extra
         MESSAGE/ERROR messages from other transactions.
-    
+
     NOTE: HELP can return a LOT of messages,
           make sure your buffers are big enough
           to deal with the flood.
@@ -925,7 +955,7 @@ def is_active(task, action, timeout=None):
         msg = m.arg_dict["MESSAGE"][0]  # MESSAGE is array of |S200
         found = tn == task and msg.find(needle) >= 0
     return found
-    
+
 
 def forward():
     '''
@@ -940,7 +970,7 @@ def forward():
         raise BadStatus(status, "MyMsgForward()")
 
 
-def msgout(m):
+def _msgout(m):
     '''
     Calls MsgOut(STATUS__OK, str).
     Sends a DITS_MSG_MESSAGE to initiator of the current action (immediately).
@@ -948,6 +978,9 @@ def msgout(m):
     '''
     cdef StatusType status = 0
     m = str(m)
+    # MsgOut doesn't handle empty strings properly
+    if not m:
+        m = ' '
     MsgOut(&status, m)
     if status != 0:
         raise BadStatus(status, "MsgOut(%s)" % (m) )
@@ -956,7 +989,7 @@ def msgout(m):
         set_param("JIT_MSG_OUT", m)
 
 
-def ersrep(e):
+def _ersrep(e):
     '''
     Calls ErsRep(ERS_M_NOFMT | ERS_M_HIGHLIGHT, STATUS__OK, str).
     Also copies message to JIT_ERS_OUT parameter (TODO is this correct?)
@@ -964,7 +997,7 @@ def ersrep(e):
     but note that the error message will not be sent until control
     returns to DRAMA (via delay(), wait(), return from action, etc).
     For immediate output, use ersout() instead.
-    
+
     TODO: Does ERS_M_HIGHLIGHT suffice for red output in JOSCON,
           or do we need to set bad status as well?
     '''
@@ -984,13 +1017,13 @@ def ersrep(e):
                                   'STATUS': [_numpy.int32(0)]} )
 
 
-def ersout(e):
+def _ersout(e):
     '''
     Calls ErsOut(ERS_M_NOFMT | ERS_M_HIGHLIGHT, STATUS__OK, str).
     Also copies message to JIT_ERS_OUT parameter (TODO is this correct?)
     ErsOut is equivalent to ErsRep + ErsFlush.
     Reports an error to initiator of the current action (immediately).
-    
+
     TODO: Does ERS_M_HIGHLIGHT suffice for red output in JOSCON,
           or do we need to set bad status as well?
     '''
@@ -1006,6 +1039,43 @@ def ersout(e):
                                   'MESSAGE': [e],
                                   'FLAGS': [_numpy.int32(flags)],
                                   'STATUS': [_numpy.int32(0)]} )
+
+
+def _wrap(s):
+    '''
+    Splits s by newlines into a list of shorter strings,
+    ensuring no string is longer than 160 chars.
+    Motivation: MsgOut/ErsOut truncate long strings.
+    '''
+    nlist = s.split('\n')
+    slist = []
+    for line in nlist:
+        while len(line) > 160:
+            # try to break the long line on whitespace
+            prefix = line[:160].rsplit(None,1)[0]
+            slist.append(prefix)
+            line = line[len(prefix):]
+        slist.append(line)
+    return slist;
+
+
+
+def msgout(m):
+    mlist = _wrap(m)
+    for m in mlist:
+        _msgout(m)
+
+
+def ersrep(e):
+    elist = _wrap(e)
+    for e in elist:
+        _ersrep(e)
+
+
+def ersout(e):
+    elist = _wrap(e)
+    for e in elist:
+        _ersout(e)
 
 
 def reschedule(seconds=None):
@@ -1035,7 +1105,7 @@ def reschedule(seconds=None):
 cdef void dispatcher(StatusType *status):
     '''C entry point for all registered DRAMA actions.'''
     cdef StatusType tstatus = 0
-    
+
     # bad entry status or failing to get entry details is a FATAL error
     n = None  # action name (msg.name), used frequently
     try:
@@ -1060,7 +1130,7 @@ cdef void dispatcher(StatusType *status):
             DitsPutRequest(DITS_REQ_END, &tstatus)
             blind_obey(_taskname, "EXIT")
             return
-    
+
     # intercept MON_STARTED to update global _monitors
     if msg.reason == DITS_REA_TRIGGER \
         and msg.status == DITS__MON_STARTED \
@@ -1068,7 +1138,7 @@ cdef void dispatcher(StatusType *status):
         if not n in _monitors:
             _monitors[n] = []
         _monitors[n].append((msg.task, msg.arg_dict['MONITOR_ID']))
-    
+
     try:
         _rescheduled.append(False)
         r = _actions[n](msg)
@@ -1161,21 +1231,21 @@ def init( taskname,
             function instead.
     '''
     cdef StatusType status = 0
-    
+
     # make sure global environment is cleaned up
     stop(taskname)
-    
+
     # flags must include X_COMPATIBLE for select() loop to work
     flags |= DITS_M_X_COMPATIBLE
     _log.debug('init: flags: %d = 0x%x' % (flags, flags))
-    
+
     #jitSetDefaults( flags, 0.0, *buffers, &status )
     b = buffers
     _log.debug('init: buffer sizes: %s' % (b))
     jitSetDefaults(flags, 0.0, b[0], b[1], b[2], b[3], &status)
     if status != 0:
         raise BadStatus(status, "jitSetDefaults")
-    
+
     # manually set our own default path info ala jitSetDefaults
     _default_path_info.MessageBytes = 8000
     _default_path_info.MaxMessages = 1
@@ -1197,12 +1267,12 @@ def init( taskname,
     DitsPutOrphanHandler(orphan_handler, &status)
     if status != 0:
         raise BadStatus(status, "DitsPutOrphanHandler")
-    
+
     # register global _actions{} using the C dispatcher() function
     if actions:
         for action in actions:
             register_action(action.__name__, action)
-            
+
     if tidefile is not None:
         _log.debug('init: tideInit(%s)' % (tidefile))
         tideInit(&_altin, tidefile, &status)
@@ -1210,7 +1280,7 @@ def init( taskname,
             raise BadStatus(status, "tideInit(%s)" % (tidefile) )
         _altin.exit_flag = 0
         _log.debug('init: saved altin: 0x%lx' % (<ulong>_altin))
-    
+
     acts = 'init: %s actions:' % (taskname)
     for k,v in _actions.items():
         acts += '\n  %s : %s' % (k,v)
@@ -1251,7 +1321,7 @@ def get_fd_sets():
     cdef StatusType status = 0
     cdef long xcond = 0  # MUST be a long to match size of void** cast
     r,w,x = set(), set(), set()
-    
+
     DitsGetXInfo(&_fd, <void**>&xcond, &status)
     if status != 0:
         raise BadStatus(status, "DitsGetXInfo")
@@ -1261,7 +1331,7 @@ def get_fd_sets():
         w.add(_fd)
     if (xcond & XtInputExceptMask):
         x.add(_fd)
-    
+
     if _altin:
         for i in xrange(DITS_C_ALT_IN_MAX):
             if _altin.Array[i].number < 0:
@@ -1276,7 +1346,7 @@ def get_fd_sets():
     # user callbacks available for read fd's only
     for fd in _callbacks.keys():
         r.add(fd)
-    
+
     return r,w,x
 
 
@@ -1301,7 +1371,7 @@ def process_fd(fd):
         if exit_flag:
             raise Exit('DitsMsgReceive')
         return
-        
+
     # Is it a user-callback registered fd?
     if fd in _callbacks:
         _callbacks[fd](fd)
@@ -1331,17 +1401,17 @@ def run(tk=None, hz=50):
     The drama_qt4.DramaWidget base class, for instance, creates a
     QSocketNotifier for every fd in get_fd_sets() and calls process_fd()
     as each fd becomes available.
-    
+
     Will run a Tk loop if you've imported the Tkinter module.
     Periodically calls tk.update() in a select() loop
         tk: Tk() instance, if None will use Tkinter._default_root.
         hz: select() loop (GUI) update rate, default 50Hz.
-    
+
     Note that (thanks to duck-typing) you could pass any object with
     an update() method as 'tk', which might be useful if you want something
     called periodically and don't want to set up an action for it.
     '''
-    
+
     # Tkinter is a big module, don't import unnecessarily
     if 'Tkinter' in _sys.modules:
         _log.debug('run: using Tkinter')
@@ -1351,13 +1421,13 @@ def run(tk=None, hz=50):
             tk = _Tkinter._default_root
     else:
         TclError = None  # 'except None as e' is okay
-    
+
     timeout_seconds = None
     if tk is not None:
         timeout_seconds = 1.0/hz
         _log.debug('run: will call %s.update() every %g seconds' % \
                           (repr(tk), timeout_seconds) )
-        
+
     try:
         while True:
             # fd's might change, must check every time
@@ -1386,19 +1456,19 @@ def run(tk=None, hz=50):
 def stop(taskname=None):
     '''
     If called from inside an action, raises Exit.
-    
+
     Otherwise, cleans up DRAMA globals and calls jitStop(taskname).
     If taskname==None, use the global _taskname from init().
-    
+
     You MUST call this function to make sure the task is unregistered
     from the IMP network system; a finally: block is a good place for it.
     '''
     cdef StatusType status = 0
     global _taskname, _altin, _fd, _callbacks, _actions, _monitors
-    
+
     if _rescheduled:
         raise Exit('stop')
-    
+
     for mlist in _monitors.values():
         while mlist:
             try:
@@ -1407,7 +1477,7 @@ def stop(taskname=None):
             except:
                 pass
     _monitors = {}
-    
+
     # Must clean up _altin manually; tideExit() is not enough.
     if _altin:
         _log.debug('stop: calling tideExit()')
@@ -1429,7 +1499,7 @@ def stop(taskname=None):
         if status != 0:
             bs = BadStatus(status, "jitStop(%s)" % (taskname) )
             _log.warn('%s' % (bs))
-    
+
     # Clean up remaining globals.
     _callbacks = {}
     _actions = {}
