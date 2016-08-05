@@ -716,11 +716,10 @@ class TransId:
     def __eq__(self, other):
         self.transid == other
 
-    def wait(self, seconds=None, msg=''):
+    def wait(self, seconds=None):
         '''
         Wait up to 'seconds' for a message on this transid.
         If 'seconds' is None (default), no timeout (wait forever).
-        On timeout, raise BadStatus(DITS__APP_TIMEOUT) with optional msg.
         Return Message instance.
         '''
         cdef DitsTransIdType ctransid = <DitsTransIdType>(<ulong>self.transid)
@@ -728,8 +727,6 @@ class TransId:
         cdef DitsDeltaTimeType *delayptr = NULL
         cdef StatusType status = 0
         cdef int count = 0
-        if msg:
-            msg = ': ' + msg
         if seconds is not None:
             s = int(seconds)
             u = int(1e6*(seconds-s))
@@ -737,12 +734,8 @@ class TransId:
             DitsDeltaTime(s, u, delayptr)
         DitsActionTransIdWait(0, delayptr, ctransid, &count, &status)
         if status:
-            raise BadStatus(status, "DitsActionTransIdWait" + msg)
-        ret = Message()
-        if ret.reason == DITS_REA_RESCHED:
-            raise BadStatus(DITS__APP_TIMEOUT,
-                "DitsActionTransIdWait timeout after %g seconds" % (seconds) + msg)
-        return ret
+            raise BadStatus(status, "DitsActionTransIdWait")
+        return Message()
 
 
 cdef class Path:
@@ -765,8 +758,10 @@ cdef class Path:
         if status != 0:
             raise BadStatus(status, 'DitsPathGet(%s)' % (task))
         t = TransId(int(<ulong>transid))
-        msg = t.wait(seconds, 'Path(%s)' % (task))
-        if msg.reason != DITS_REA_PATHFOUND:
+        msg = t.wait(seconds)
+        if msg.reason == DITS_REA_RESCHED:
+            raise BadStatus(DITS__APP_TIMEOUT, 'Path(%s) timeout after %g seconds' % (task, seconds))
+        elif msg.reason != DITS_REA_PATHFOUND:
             raise BadStatus(DITS__APP_ERROR, 'Path(%s) unexpected message: %s' % (task, msg))
 
 
@@ -948,8 +943,10 @@ def is_active(task, action, timeout=None):
     interested()
     found = False
     while True:
-        m = tid.wait(timeout, 'is_active(%s,%s)' % (task, action))
-        if m.reason != DITS_REA_MESSAGE:
+        m = tid.wait(timeout)
+        if m.reason == DITS_REA_RESCHED:
+            raise BadStatus(DITS__APP_TIMEOUT, 'is_active(%s,%s) timeout after %g seconds' % (task, action, timeout))
+        elif m.reason != DITS_REA_MESSAGE:
             break
         tn = m.arg_dict['TASKNAME']
         msg = m.arg_dict["MESSAGE"][0]  # MESSAGE is array of |S200
