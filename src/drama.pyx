@@ -738,6 +738,15 @@ class TransId:
         return Message()
 
 
+def wait(seconds=None):
+    '''
+    Wait up to 'seconds' for a message for this action.
+    If 'seconds' is None (default), no timeout (wait forever).
+    Return Message instance.
+    '''
+    return TransId(0).wait(seconds)
+
+
 cdef class Path:
     '''
     Path object holds a DitsPathType for internal use by obey etc.
