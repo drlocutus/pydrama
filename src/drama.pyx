@@ -1065,21 +1065,24 @@ def _wrap(s):
 
 
 def msgout(m):
-    mlist = _wrap(m)
-    for m in mlist:
-        _msgout(m)
+    if _fd >= 0:  # silently ignore if drama not initialized
+        mlist = _wrap(m)
+        for m in mlist:
+            _msgout(m)
 
 
 def ersrep(e):
-    elist = _wrap(e)
-    for e in elist:
-        _ersrep(e)
+    if _fd >= 0:  # silently ignore if drama not initialized
+        elist = _wrap(e)
+        for e in elist:
+            _ersrep(e)
 
 
 def ersout(e):
-    elist = _wrap(e)
-    for e in elist:
-        _ersout(e)
+    if _fd >= 0:  # silently ignore if drama not initialized
+        elist = _wrap(e)
+        for e in elist:
+            _ersout(e)
 
 
 def reschedule(seconds=None):
