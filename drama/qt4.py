@@ -20,10 +20,15 @@ Example:
             drama.blind_obey(self.taskname, "ACTION", "hello!")
             super(MyWidget, self).__init__()
             self.show()
-            
+        
+        def get_title(self, title):
+            return str(title)
+        
         def ACTION(self, msg):
-            drama.msgout("ACTION: %s" % (msg.arg_list[0]))
-            self.setWindowTitle(str(msg.arg_list[0]))
+            arg_list, arg_dict = drama.parse_argument(msg.arg)
+            title = get_title(self, *arg_list, **arg_dict)
+            drama.msgout("ACTION: %s" % (title))
+            self.setWindowTitle(title)
             self.update()
     
     taskname = "QTASK"
