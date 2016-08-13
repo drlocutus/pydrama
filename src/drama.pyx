@@ -623,8 +623,7 @@ class Message:
         reason    int, entry reason from DitsGetEntInfo()
         status    int, entry status from DitsGetEntInfo()
         arg_name  str, arg name from SdsInfo(DitsGetArgument())
-        arg_list  [], positional args from DitsGetArgument()
-        arg_dict  {}, keyword args from DitsGetArgument()
+        arg       ???, arg value
         arg_extra str, arg string from SdsGetExtra(DitsGetArgument())
     '''
 
@@ -669,7 +668,7 @@ class Message:
 
         # get message argument, separate positional/keyword parameters
         argid = DitsGetArgument()
-        arg = obj_from_sds(argid)
+        self.arg = obj_from_sds(argid)
 
         self.arg_name = None
         self.arg_extra = None
@@ -689,19 +688,18 @@ class Message:
         self.transid = int(<ulong>ent_transid)
         self.reason = int(ent_reason)
         self.status = int(ent_status)
-        self.arg_list, self.arg_dict = parse_argument(arg)
 
     def __repr__(self):
 #        usecs = int(1e6*(self.time-int(self.time)))
 #        return 'Message(%s, %s:%s, %s, 0x%x, %s, %d:%s, %s, %s)' % (
 #            _time.strftime('%%Y%%m%%d %%H:%%M:%%S.%06d %%Z' % (usecs),
 #                           _time.localtime(self.time) ),
-        return 'Message(%s:%s, %s, 0x%x, %s, %d:%s, %s, %s, %s, %s)' % (
+        return 'Message(%s:%s, %s, 0x%x, %s, %d:%s, %s, %s, %s)' % (
             self.task, self.entry,
             self.name, self.transid,
             _entry_reason_string[self.reason],
             self.status, get_status_string(self.status),
-            self.arg_name, self.arg_list, self.arg_dict, self.arg_extra)
+            self.arg_name, self.arg, self.arg_extra)
 
 
 class TransId:
@@ -845,7 +843,7 @@ def monitor(task, param):
     elif msg.reason == DITS_REA_TRIGGER:
         if msg.status == DITS__MON_STARTED:
             if msg.transid == montid
-                monid = msg.arg_dict['MONITOR_ID']
+                monid = msg.arg['MONITOR_ID']
         elif msg.status == DITS__MON_CHANGED:
             ...
     elif msg.reason == DITS_REA_KICK:
@@ -957,8 +955,8 @@ def is_active(task, action, timeout=None):
             raise BadStatus(DITS__APP_TIMEOUT, 'is_active(%s,%s) timeout after %g seconds' % (task, action, timeout))
         elif m.reason != DITS_REA_MESSAGE:
             break
-        tn = m.arg_dict['TASKNAME']
-        msg = m.arg_dict["MESSAGE"][0]  # MESSAGE is array of |S200
+        tn = m.arg['TASKNAME']
+        msg = m.arg["MESSAGE"][0]  # MESSAGE is array of |S200
         found = tn == task and msg.find(needle) >= 0
     return found
 
@@ -1140,10 +1138,10 @@ cdef void dispatcher(StatusType *status):
     # intercept MON_STARTED to update global _monitors
     if msg.reason == DITS_REA_TRIGGER \
         and msg.status == DITS__MON_STARTED \
-        and 'MONITOR_ID' in msg.arg_dict:
+        and 'MONITOR_ID' in msg.arg:
         if not n in _monitors:
             _monitors[n] = []
-        _monitors[n].append((msg.task, msg.arg_dict['MONITOR_ID']))
+        _monitors[n].append((msg.task, msg.arg['MONITOR_ID']))
 
     try:
         _rescheduled.append(False)
@@ -1195,7 +1193,7 @@ cdef void orphan_handler(StatusType *status):
     _log.debug('orphan_handler entry message: %s' % (msg))
     # TODO spit out an ErsRep or something?  where would it go?
     if msg.reason == DITS_REA_TRIGGER and msg.status == DITS__MON_STARTED:
-        monid = int(msg.arg_dict['MONITOR_ID'])
+        monid = int(msg.arg['MONITOR_ID'])
         _log.debug('orphan_handler: canceling monitor %s:%d' % \
                    (msg.task, monid))
         path = DitsGetEntPath()
