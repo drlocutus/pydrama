@@ -912,6 +912,9 @@ def signal(action, *args, **kwargs):
     '''
     Construct a Dits argument from *args/**kwargs and call
     DitsSignalByName to send a message to another action in this task.
+    
+    WARNING: This function causes a BADID error for the received message
+    and will kill any action you send it to.  Do not use.
     '''
     cdef StatusType status = 0
     argid = make_argument(*args, **kwargs)
@@ -919,6 +922,16 @@ def signal(action, *args, **kwargs):
     delete_sds(argid)
     if status != 0:
         raise BadStatus(status, "DitsSignalByName(%s,%d)" % (action, argid))
+
+
+def trigger(*args, **kwargs):
+    '''Trigger parent action.'''
+    cdef StatusType status = 0
+    argid = make_argument(*args, **kwargs)
+    DitsTrigger(argid, &status)
+    delete_sds(argid)
+    if status != 0:
+        raise BadStatus(status, "DitsTrigger(%d)" % (argid))
 
 
 def is_active(task, action, timeout=None):
