@@ -1130,7 +1130,7 @@ cdef void dispatcher(StatusType *status):
     n = None  # action name (msg.name), used frequently
     try:
         msg = Message()  # grabs Dits entry info
-        _log.debug("dispatcher entry message: %s" % (msg))
+        _log.debug("dispatcher entry message: %s", msg)
         n = msg.name
     except (TypeError, ValueError):
         status[0] = DITS__INVARG
@@ -1180,7 +1180,7 @@ cdef void dispatcher(StatusType *status):
         _log.exception('%s: bad status' % (n))
     except Exit as e:
         status[0] = DITS__EXITHANDLER
-        _log.debug('%s: %s' % (n, repr(e)))
+        _log.debug('%s: %s', n, repr(e))
         blind_obey(_taskname, "EXIT")  # DITS_REQ_EXIT doesn't work
     except:
         status[0] = DITS__APP_ERROR
@@ -1206,12 +1206,11 @@ cdef void orphan_handler(StatusType *status):
     cdef DitsGsokMessageType message
     cdef DitsPathType path
     msg = Message()  # grabs Dits entry info
-    _log.debug('orphan_handler entry message: %s' % (msg))
+    _log.debug('orphan_handler entry message: %s', msg)
     # TODO spit out an ErsRep or something?  where would it go?
     if msg.reason == DITS_REA_TRIGGER and msg.status == DITS__MON_STARTED:
         monid = int(msg.arg['MONITOR_ID'])
-        _log.debug('orphan_handler: canceling monitor %s:%d' % \
-                   (msg.task, monid))
+        _log.debug('orphan_handler: canceling monitor %s:%d', msg.task, monid)
         path = DitsGetEntPath()
         argid = make_argument(monid)
         message.flags = DITS_M_ARGUMENT
@@ -1257,11 +1256,11 @@ def init( taskname,
 
     # flags must include X_COMPATIBLE for select() loop to work
     flags |= DITS_M_X_COMPATIBLE
-    _log.debug('init: flags: %d = 0x%x' % (flags, flags))
+    _log.debug('init: flags: %d = 0x%x', flags, flags)
 
     #jitSetDefaults( flags, 0.0, *buffers, &status )
     b = buffers
-    _log.debug('init: buffer sizes: %s' % (b))
+    _log.debug('init: buffer sizes: %s', b)
     jitSetDefaults(flags, 0.0, b[0], b[1], b[2], b[3], &status)
     if status != 0:
         raise BadStatus(status, "jitSetDefaults")
@@ -1294,12 +1293,12 @@ def init( taskname,
             register_action(action.__name__, action)
 
     if tidefile is not None:
-        _log.debug('init: tideInit(%s)' % (tidefile))
+        _log.debug('init: tideInit(%s)', tidefile)
         tideInit(&_altin, tidefile, &status)
         if status != 0:
             raise BadStatus(status, "tideInit(%s)" % (tidefile) )
         _altin.exit_flag = 0
-        _log.debug('init: saved altin: 0x%lx' % (<ulong>_altin))
+        _log.debug('init: saved altin: 0x%lx', <ulong>_altin)
 
     acts = 'init: %s actions:' % (taskname)
     for k,v in _actions.items():
@@ -1445,8 +1444,7 @@ def run(tk=None, hz=50):
     timeout_seconds = None
     if tk is not None:
         timeout_seconds = 1.0/hz
-        _log.debug('run: will call %s.update() every %g seconds' % \
-                          (repr(tk), timeout_seconds) )
+        _log.debug('run: will call %s.update() every %g seconds', repr(tk), timeout_seconds)
 
     try:
         while True:
@@ -1513,7 +1511,7 @@ def stop(taskname=None):
     if _fd != -1:
         if taskname is None:
             taskname = _taskname
-        _log.debug('stop: calling jitStop(%s)' % (taskname))
+        _log.debug('stop: calling jitStop(%s)', taskname)
         jitStop(taskname, &status)
         _fd = -1
         if status != 0:

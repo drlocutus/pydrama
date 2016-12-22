@@ -109,7 +109,7 @@ class DramaWidget(_QtGui.QWidget):
 
     def new_fd(self, fd, fdtype):
         '''Create/connect a new QSocketNotifier for given file descriptor.'''
-        _log.debug('DramaWidget.new_fd(%d, %d)' % (fd, fdtype) )
+        _log.debug('DramaWidget.new_fd(%d, %d)', fd, fdtype)
         qsn = _QtCore.QSocketNotifier(fd, fdtype, self)
         self.task_notifiers.append(qsn)
         qsn.activated.connect(self.on_fd)
