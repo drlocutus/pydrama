@@ -818,7 +818,7 @@ def kick(task, action, *args, **kwargs):
 
 
 def blind_kick(task, action, *args, **kwargs):
-    '''Kick task:action with given args and return a TransId.'''
+    '''Kick task:action with given args without creating a transaction.'''
     obeykick_impl(False, False, task, action, *args, **kwargs)
 
 
