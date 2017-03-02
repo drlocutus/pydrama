@@ -712,7 +712,10 @@ class TransId:
         self.transid = transid
 
     def __eq__(self, other):
-        self.transid == other
+        return self.transid == other
+    
+    def __hash__(self):
+        return hash(self.transid)
 
     def wait(self, seconds=None):
         '''
