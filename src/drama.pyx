@@ -1190,17 +1190,18 @@ cdef void dispatcher(StatusType *status):
         _log.exception('%s: other error' % (n))
     finally:
         if status[0] != 0:
-            DitsPutRequest(DITS_REQ_END, &tstatus)
             _rescheduled[-1] = False
-        if not _rescheduled[-1] and n in _monitors:
-            mlist = _monitors[n]
-            while mlist:
-                try:
-                    task, monid = mlist.pop()
-                    cancel(task, monid)
-                except:
-                    pass
-            del _monitors[n]
+        if not _rescheduled[-1]:
+            DitsPutRequest(DITS_REQ_END, &tstatus)
+            if n in _monitors:
+                mlist = _monitors[n]
+                while mlist:
+                    try:
+                        task, monid = mlist.pop()
+                        cancel(task, monid)
+                    except:
+                        pass
+                del _monitors[n]
         _rescheduled.pop()
 
 
