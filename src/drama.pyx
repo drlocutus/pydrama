@@ -428,7 +428,9 @@ cdef object _obj_from_sds(SdsIdType id):
     if id == 0:
         return None
 
+    _log.debug('_obj_from_sds: calling sds_info(%d)', id)
     name, code, dims = sds_info(id)
+    _log.debug('_obj_from_sds: name,code,dims: %s, %s, %s', name, code, dims)
 
     # dits dim/index ordering is reversed vs numpy.
     if dims is not None:
@@ -446,13 +448,18 @@ cdef object _obj_from_sds(SdsIdType id):
             obj = {}
             i = 1  # DRAMA is 1-based...WHY
             while status == 0:
+                _log.debug('_obj_from_sds: calling SdsIndex(%d)', i)
                 SdsIndex(id, i, &cid, &status)
                 if status != 0:
                     break
+                _log.debug('_obj_from_sds: calling sds_info(%d)', cid)
                 cname, dummy, dummy = sds_info(cid)
+                _log.debug('_obj_from_sds: recursing on %s', cname)
                 obj[cname] = _obj_from_sds(cid)
                 i += 1
+                _log.debug('_obj_from_sds: SdsFreeId(%d)', cid)
                 SdsFreeId(cid, &status)
+            _log.debug('_obj_from_sds: returning %s', obj)
             return obj
         else:
             # create numpy array of python objs and fill it out
@@ -469,22 +476,27 @@ cdef object _obj_from_sds(SdsIdType id):
             return obj
 
     # for anything else we need the raw buffer
+    _log.debug('_obj_from_sds: SdsPointer(%d)', id)
     SdsPointer(id, &buf, &buflen, &status)
     if status == SDS__UNDEFINED:
         return None
     if status != 0:
         raise BadStatus(status, "SdsPointer(%d)" % (id))
+    _log.debug('_obj_from_sds: calling PyString_FromStringAndSize(%x, %d)', <unsigned long>buf, buflen)
     sbuf = PyString_FromStringAndSize(<char*>buf, buflen)
+    _log.debug('_obj_from_sds: sbuf %s: %s', type(sbuf), repr(sbuf))
 
     # using a string as a buffer is problematic because strings are immutable
     # and numpy decides to use the buffer memory directly.
     # NOTE use .copy() to force array memory ownership.
 
     if code == SDS_CHAR:
+        _log.debug('_obj_from_sds: SDS_CHAR')
         if dims is None or len(dims) < 2:
             n = sbuf.find('\0')
             if n >= 0:
                 sbuf = sbuf[:n]
+            _log.debug('_obj_from_sds: return sbuf %s', sbuf)
             return sbuf
         dtype = '|S%d' % (dims[-1])
         obj = _numpy.ndarray(shape=dims[:-1], dtype=dtype, buffer=sbuf).copy()
@@ -494,11 +506,20 @@ cdef object _obj_from_sds(SdsIdType id):
             n = obj[index].find('\0')
             if n >= 0:
                 obj[index] = obj[index][:n]
+        _log.debug('_obj_from_sds: return obj %s', obj)
         return obj
 
+    _log.debug('_obj_from_sds: ndarray')
     dtype = _sds_code_to_dtype[code]
+    _log.debug('_obj_from_sds: ndarray(%s, %s, %s)', dims, dtype, sbuf)
     obj = _numpy.ndarray(shape=dims, dtype=dtype, buffer=sbuf).copy()
-    obj = obj[()]  # this will deref a scalar array or return original array.
+    _log.debug('_obj_from_sds: past ndarray, obj %s', repr(obj))
+    #_log.debug('_obj_from_sds: trying [()]')
+    #obj = obj[()]  # this will deref a scalar array or return original array.
+    #_log.debug('_obj_from_sds: past [()]')
+    if not obj.shape:
+        obj = obj.dtype.type(obj)
+    _log.debug('_obj_from_sds: returning %s', obj)
     return obj
 
 
@@ -639,12 +660,15 @@ class Message:
         cdef DitsTransIdType ent_transid
         cdef DitsReasonType ent_reason
         cdef StatusType ent_status
+        
+        _log.debug('Message(): calling DitsGetEntInfo')
         DitsGetEntInfo (DITS_C_NAMELEN, ent_name, &ent_path, &ent_transid,
                         &ent_reason, &ent_status, &status)
         if status != 0:
             raise BadStatus(status, "DitsGetEntInfo")
 
         # entry name is not necessarily the action name.
+        _log.debug('Message(): calling DitsGetName')
         DitsGetName(DITS_C_NAMELEN, act_name, &status)
         # but this might be the orphan handler, no name
         if status == DITS__NOTUSERACT:
@@ -656,9 +680,11 @@ class Message:
         # get the calling task from the entry path.
         # fall back to parent path if entry path is NULL.
         if <ulong>ent_path == 0:
+            _log.debug('Message(): calling DitsGetParentPath')
             ent_path = DitsGetParentPath()
         # get taskname if non-NULL path, otherwise shrug and give up
         if <ulong>ent_path != 0:
+            _log.debug('Message(): calling DitsTaskFromPath')
             DitsTaskFromPath(ent_path, DITS_C_NAMELEN, ent_task, &status)
             if status != 0:
                 raise BadStatus(status,
@@ -667,13 +693,17 @@ class Message:
             strcpy(ent_task, "???")
 
         # get message argument, separate positional/keyword parameters
+        _log.debug('Message(): calling DitsGetArgument')
         argid = DitsGetArgument()
+        _log.debug('Message(): calling obj_from_sds(%d)', argid)
         self.arg = obj_from_sds(argid)
 
         self.arg_name = None
         self.arg_extra = None
         if argid != 0:
+            _log.debug('Message(): calling sds_info(%d)', argid)
             self.arg_name, arg_code, arg_dims = sds_info(argid)
+            _log.debug('Message(): calling SdsGetExtra')
             SdsGetExtra(argid, DITS_C_NAMELEN, extra, &extra_len, &status)
             if status != 0:
                 raise BadStatus(status, "SdsGetExtra(%d)" % (argid))
@@ -688,6 +718,9 @@ class Message:
         self.transid = int(<ulong>ent_transid)
         self.reason = int(ent_reason)
         self.status = int(ent_status)
+        
+        _log.debug('Message(): done.')
+
 
     def __repr__(self):
 #        usecs = int(1e6*(self.time-int(self.time)))
@@ -1128,6 +1161,8 @@ def reschedule(seconds=None):
 cdef void dispatcher(StatusType *status):
     '''C entry point for all registered DRAMA actions.'''
     cdef StatusType tstatus = 0
+    
+    _log.debug('dispatcher called.')
 
     # bad entry status or failing to get entry details is a FATAL error
     n = None  # action name (msg.name), used frequently
@@ -1158,13 +1193,16 @@ cdef void dispatcher(StatusType *status):
     if msg.reason == DITS_REA_TRIGGER \
         and msg.status == DITS__MON_STARTED \
         and 'MONITOR_ID' in msg.arg:
+        _log.debug('dispatcher: adding monitor %s to %s list', msg.arg['MONITOR_ID'], n)
         if not n in _monitors:
             _monitors[n] = []
         _monitors[n].append((msg.task, msg.arg['MONITOR_ID']))
 
     try:
         _rescheduled.append(False)
+        _log.debug('dispatcher: calling action %s: %s', n, _actions[n])
         r = _actions[n](msg)
+        _log.debug('dispatcher: action %s returned %s', n, r)
         if r is not None:  # action returned a value
             if isinstance(r, tuple):
                 a = make_argument(*r)  # {'Argument1':r[0], 'Argument2':r[1], ...}
@@ -1203,6 +1241,7 @@ cdef void dispatcher(StatusType *status):
                         pass
                 del _monitors[n]
         _rescheduled.pop()
+    _log.debug('dispatcher done.')
 
 
 cdef void orphan_handler(StatusType *status):
@@ -1387,8 +1426,15 @@ def process_fd(fd):
 
     # Is the main Dits fd?
     if fd == _fd:
-        while not exit_flag and DitsMsgAvail(&status):
+        _log.debug('process_fd: calling DitsMsgAvail')
+        msg_count = DitsMsgAvail(&status)
+        _log.debug('process_fd: msg_count %d', msg_count)
+        while not exit_flag and msg_count > 0:
+            _log.debug('process_fd: calling DitsMsgReceive')
             DitsMsgReceive(&exit_flag, &status)
+            _log.debug('process_fd: calling DitsMsgAvail')
+            msg_count = DitsMsgAvail(&status)
+            _log.debug('process_fd: msg_count %d', msg_count)
         if status:
             raise BadStatus(status, 'DitsMsgReceive')
         if exit_flag:
@@ -1453,8 +1499,10 @@ def run(tk=None, hz=50):
     try:
         while True:
             # fd's might change, must check every time
+            _log.debug('run: calling get_fd_sets()')
             r,w,x = get_fd_sets()
             sr,sw,sx = [],[],[]
+            _log.debug('run: select(%s,%s,%s,%g)', r,w,x,timeout_seconds)
             try:
                 sr,sw,sx = _select.select(r,w,x, timeout_seconds)
             except _select.error as e:
@@ -1462,9 +1510,12 @@ def run(tk=None, hz=50):
                 if e.args[0] != _errno.EINTR:
                     raise
             fds = set(sr) | set(sw) | set(sx)
+            _log.debug('run: fds %s', fds)
             for fd in fds:
+                _log.debug('run: process_fd(%s)', fd)
                 process_fd(fd)
             if tk is not None:
+                _log.debug('run: %s.update()', repr(tk))
                 tk.update()
     except Exit:
         # catch Exit() so it doesn't cause bad $? exit status
@@ -1473,6 +1524,8 @@ def run(tk=None, hz=50):
         # exit quietly if tk destroyed, else reraise
         if e.args[0].find('application has been destroyed') < 0:
             raise
+    
+    _log.debug('run: done.')
 
 
 def stop(taskname=None):
@@ -1495,6 +1548,7 @@ def stop(taskname=None):
         while mlist:
             try:
                 task, monid = mlist.pop()
+                _log.debug('stop: cancel(%s, %s)', task, monid)
                 cancel(task, monid)
             except:
                 pass
