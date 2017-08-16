@@ -2,7 +2,9 @@
 
 import uae
 
-uae.ext_modules = [
+uae.setup(
+  packages = ['drama'],
+  ext_modules = [
     uae.Extension("drama.__drama__", ["src/drama.pyx"],
         depends=['setup.py',
                  'src/drama.pxd',
@@ -17,7 +19,4 @@ uae.ext_modules = [
         # preserve wrapped functions for debugging/profiling
         extra_compile_args=["-fno-inline-functions-called-once"]
         )]
-
-uae.packages = ['drama']
-uae.setup()
-
+)
