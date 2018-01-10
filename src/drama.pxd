@@ -348,6 +348,8 @@ cdef extern from "DitsInteraction.h":
     void DitsPathGet(char *name, char *node, int flags,
                      DitsPathInfoType *info, DitsPathType *path,
                      DitsTransIdType *transid, StatusType *status)
+    
+    void DitsLosePath(DitsPathType path, StatusType *status)
 
     void DitsInitiateMessage(long flags, DitsPathType path,
                              DitsTransIdType *transid,

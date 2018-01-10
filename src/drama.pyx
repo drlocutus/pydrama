@@ -791,21 +791,26 @@ cdef class Path:
         cdef StatusType status = 0
         cdef DitsTransIdType transid
         self.path = NULL
-        DitsPathGet(task, NULL, 0, NULL, &self.path, NULL, &status)
-        if status == 0:
-            return
-        if seconds <= 0.0:
-            raise BadStatus(status, 'DitsPathGet(%s)' % (task))
-        ErsAnnul(&status)
-        DitsPathGet(task, NULL, 0, &_default_path_info, &self.path, &transid, &status)
-        if status != 0:
-            raise BadStatus(status, 'DitsPathGet(%s)' % (task))
-        t = TransId(int(<ulong>transid))
-        msg = t.wait(seconds)
-        if msg.reason == DITS_REA_RESCHED:
-            raise BadStatus(DITS__APP_TIMEOUT, 'Path(%s) timeout after %g seconds' % (task, seconds))
-        elif msg.reason != DITS_REA_PATHFOUND:
-            raise BadStatus(DITS__APP_ERROR, 'Path(%s) unexpected message: %s' % (task, msg))
+        try:
+            DitsPathGet(task, NULL, 0, NULL, &self.path, NULL, &status)
+            if status == 0:
+                return
+            if seconds <= 0.0:
+                raise BadStatus(status, 'DitsPathGet(%s)' % (task))
+            ErsAnnul(&status)
+            DitsPathGet(task, NULL, 0, &_default_path_info, &self.path, &transid, &status)
+            if status != 0:
+                raise BadStatus(status, 'DitsPathGet(%s)' % (task))
+            t = TransId(int(<ulong>transid))
+            msg = t.wait(seconds)
+            if msg.reason == DITS_REA_RESCHED:
+                raise BadStatus(DITS__APP_TIMEOUT, 'Path(%s) timeout after %g seconds' % (task, seconds))
+            elif msg.reason != DITS_REA_PATHFOUND:
+                raise BadStatus(DITS__APP_ERROR, 'Path(%s) unexpected message: %s' % (task, msg))
+        except BadStatus:
+            status = 0
+            DitsLosePath(self.path, &status)
+            raise
 
 
 def cache_path(taskname):
