@@ -1379,8 +1379,13 @@ def register_callback(fd, callback):
     '''
     Register a callable object (function, bound member function, etc)
     to be invoked as callback(fd) when fd becomes available for reading.
+    To unregister an fd, pass callback=None.
     '''
-    _callbacks[fd] = callback
+    if not callback:
+        if fd in _callbacks:
+            del _callbacks[fd]
+    else:
+        _callbacks[fd] = callback
 
 
 def get_fd_sets():
