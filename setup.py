@@ -1,6 +1,6 @@
 #!/local/python/bin/python2
 
-import uae
+from jac_sw import uae
 import numpy
 
 uae.setup(
