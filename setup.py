@@ -18,6 +18,7 @@ uae.setup(
         define_macros=[("unix",None),("DPOSIX_1",None),
                        ("_GNU_SOURCE",None),("UNIX",None)],
         # preserve wrapped functions for debugging/profiling
-        extra_compile_args=["-fno-inline-functions-called-once"]
+        extra_compile_args=["-fno-inline-functions-called-once",
+                            "-Wno-unreachable-code"]
         )]
 )

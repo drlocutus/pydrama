@@ -1,8 +1,11 @@
+#encoding: utf8
 #cython: embedsignature=True
+#cython: c_string_type=str
+#cython: c_string_encoding=default
 '''
 DRAMA Python module.
 
-Author: Ryan Berthold, JAC
+Author: Ryan Berthold, EAO
 
 A note on logging/debug output:
 
@@ -341,6 +344,17 @@ cdef SdsIdType _sds_from_obj(object obj, char* name="", SdsIdType pid=0):
         #dtype = obj.dtype.str  # no real speed improvement
         shape = obj.shape
 
+    # unicode (py3 str) gets type <U, 4 bytes per char with nulls.
+    # convert to byte strings; unfortunately numpy (1.15) casting ignores
+    # the preferred encoding and will choke on non-ascii characters.
+    if dtype.startswith("<U") or dtype.startswith(">U"):
+        #obj = _numpy.array(obj, dtype='|S')  # always uses ascii, even in py3
+        obj = obj.astype(object)
+        for i,x in _numpy.ndenumerate(obj):
+            obj[i] = x.encode()
+        obj = obj.astype(bytes)
+        dtype = str(obj.dtype)
+    
     # for strings, append strlen to dims; get non-struct typecode
     if dtype.startswith("|S"):
         # some DRAMA ops expect null-terminated strings, but
@@ -482,20 +496,21 @@ cdef object _obj_from_sds(SdsIdType id):
         return None
     if status != 0:
         raise BadStatus(status, "SdsPointer(%d)" % (id))
-    _log.debug('_obj_from_sds: calling PyString_FromStringAndSize(%x, %d)', <unsigned long>buf, buflen)
-    sbuf = PyString_FromStringAndSize(<char*>buf, buflen)
+    _log.debug('_obj_from_sds: calling PyBytes_FromStringAndSize(%x, %d)', <unsigned long>buf, buflen)
+    sbuf = PyBytes_FromStringAndSize(<char*>buf, buflen)
     _log.debug('_obj_from_sds: sbuf %s: %s', type(sbuf), repr(sbuf))
 
     # using a string as a buffer is problematic because strings are immutable
     # and numpy decides to use the buffer memory directly.
     # NOTE use .copy() to force array memory ownership.
-
+    
     if code == SDS_CHAR:
         _log.debug('_obj_from_sds: SDS_CHAR')
         if dims is None or len(dims) < 2:
-            n = sbuf.find('\0')
+            n = sbuf.find(b'\0')
             if n >= 0:
                 sbuf = sbuf[:n]
+            sbuf = str(sbuf.decode())
             _log.debug('_obj_from_sds: return sbuf %s', sbuf)
             return sbuf
         dtype = '|S%d' % (dims[-1])
@@ -503,9 +518,15 @@ cdef object _obj_from_sds(SdsIdType id):
         # clean up the strings so they look nicer when printed;
         # trailing garbage will show up if non-null.
         for index in _numpy.ndindex(obj.shape):
-            n = obj[index].find('\0')
+            n = obj[index].find(b'\0')
             if n >= 0:
                 obj[index] = obj[index][:n]
+        # for python3, convert to str
+        if _sys.version[0] == '3':
+            obj = obj.astype(object)
+            for i,x in _numpy.ndenumerate(obj):
+                obj[i] = x.decode()
+            obj = obj.astype(str)
         _log.debug('_obj_from_sds: return obj %s', obj)
         return obj
 
@@ -527,7 +548,9 @@ def sds_from_xml(buf):
     '''Return a new SDS structure id from XML buf (data or filename).'''
     cdef SdsIdType id = 0
     cdef StatusType status = 0
-    jitXML2Sds(len(buf), buf, &id, &status)
+    # if buf is unicode, possibly len(buf) != len(bytes(buf)).  convert first.
+    cdef char * cbuf = buf
+    jitXML2Sds(strlen(cbuf), cbuf, &id, &status)
     if status != 0:
         raise BadStatus(status, "jitXML2Sds(%s)" % (buf))
     return id
@@ -690,6 +713,8 @@ class Message:
                 raise BadStatus(status,
                                 "DitsTaskFromPath(0x%x)" % (<ulong>ent_path) )
         else:
+            # TODO maybe get path from ent_transid?  has a field for it.
+            # would have to pull in and cast as Dits___TransIdType* tho.
             strcpy(ent_task, "???")
 
         # get message argument, separate positional/keyword parameters
@@ -1011,7 +1036,7 @@ def is_active(task, action, timeout=None):
             break
         tn = m.arg['TASKNAME']
         msg = m.arg["MESSAGE"][0]  # MESSAGE is array of |S200
-        found = tn == task and msg.find(needle) >= 0
+        found = found or (tn == task and msg.find(needle) >= 0)
     return found
 
 
@@ -1105,6 +1130,7 @@ def _wrap(s):
     ensuring no string is longer than 160 chars.
     Motivation: MsgOut/ErsOut truncate long strings.
     '''
+    s = str(s)
     nlist = s.split('\n')
     slist = []
     for line in nlist:
@@ -1298,6 +1324,7 @@ def init( taskname,
             function instead.
     '''
     cdef StatusType status = 0
+    taskname = str(taskname)
 
     # make sure global environment is cleaned up
     stop(taskname)
@@ -1498,6 +1525,12 @@ def run(tk=None, hz=50):
         TclError = _Tkinter.TclError
         if tk is None:
             tk = _Tkinter._default_root
+    elif 'tkinter' in _sys.modules:  # there's probably a better way
+        _log.debug('run: using tkinter')
+        import tkinter as _tkinter
+        TclError = _tkinter.TclError
+        if tk is None:
+            tk = _tkinter._default_root
     else:
         TclError = None  # 'except None as e' is okay
 

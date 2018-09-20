@@ -5,7 +5,7 @@ from libc.string cimport memset, memcmp, strlen, strcpy
 
 # need this to create strs from c bufs
 cdef extern from "Python.h":
-    object PyString_FromStringAndSize(char *s, Py_ssize_t len)
+    object PyBytes_FromStringAndSize(char *s, Py_ssize_t len)
 
 # i get tired of typing unsigned long
 ctypedef unsigned long ulong

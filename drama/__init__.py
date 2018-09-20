@@ -1,1 +1,1 @@
-from __drama__ import *
+from drama.__drama__ import *

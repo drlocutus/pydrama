@@ -112,7 +112,7 @@ def setup(taskname=None):
     strftime_h = None
     if taskname:
         strftime_h = StrftimeHandler('/jac_logs/%%Y%%m%%d/%s.log' % (taskname),
-                                     utc=True, chmod=02777)
+                                     utc=True, chmod=0o2777)
         strftime_h.setFormatter(f)
         _logging.root.addHandler(strftime_h)
 
