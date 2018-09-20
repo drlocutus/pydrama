@@ -11,6 +11,7 @@ setup.cfg
 *.pyc
 *.c
 *.so
+version.py
 
 # Packages
 # it's better to unpack and commit,
