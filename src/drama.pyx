@@ -1179,12 +1179,15 @@ def ersout(e):
 def reschedule(seconds=None):
     '''
     Reschedule the action using DitsPutRequest or jitDelayRequest.
+    if seconds is False, DITS_REQ_END (cancel previous reschedule)
     if seconds is None, DITS_REQ_SLEEP (wait for message)
     if seconds <= 0, DITS_REQ_STAGE (reschedule immediately)
     Otherwise call jitDelayRequest.
     'seconds' can be an absolute or relative timeout.
     '''
     cdef StatusType status = 0
+    if seconds is False:
+        DitsPutRequest(DITS_REQ_END, &status)
     if seconds is None:
         DitsPutRequest(DITS_REQ_SLEEP, &status)
     else:
@@ -1197,7 +1200,16 @@ def reschedule(seconds=None):
             jitDelayRequest(s, &status)
     if status != 0:
         raise BadStatus(status, 'reschedule(%s)' % (seconds))
-    _rescheduled[-1] = True
+    _rescheduled[-1] = (seconds is not False)
+
+
+def rescheduled():
+    '''
+    Return True if the current action has been rescheduled.
+    Return False if not rescheduled, prior rescheduling was cancelled,
+      or if this function is called outside an action.
+    '''
+    return bool(_rescheduled and _rescheduled[-1])
 
 
 cdef void dispatcher(StatusType *status):
