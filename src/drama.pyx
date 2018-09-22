@@ -794,7 +794,18 @@ class TransId:
         DitsActionTransIdWait(0, delayptr, ctransid, &count, &status)
         if status:
             raise BadStatus(status, "DitsActionTransIdWait")
-        return Message()
+        # since this mechanism bypasses dispatcher for the current action,
+        # duplicate the monitor-handling code for automatic cleanup later.
+        msg = Message()
+        if msg.reason == DITS_REA_TRIGGER \
+            and msg.status == DITS__MON_STARTED \
+            and 'MONITOR_ID' in msg.arg:
+            n = msg.name
+            _log.debug('wait: _monitors[%s].append(%s,%s)', n, msg.task, msg.arg['MONITOR_ID'])
+            if not n in _monitors:
+                _monitors[n] = []
+            _monitors[n].append((msg.task, msg.arg['MONITOR_ID']))
+        return msg
 
 
 def wait(seconds=None):
@@ -1224,7 +1235,7 @@ cdef void dispatcher(StatusType *status):
     if msg.reason == DITS_REA_TRIGGER \
         and msg.status == DITS__MON_STARTED \
         and 'MONITOR_ID' in msg.arg:
-        _log.debug('dispatcher: adding monitor %s to %s list', msg.arg['MONITOR_ID'], n)
+        _log.debug('dispatcher: _monitors[%s].append(%s,%s)', n, msg.task, msg.arg['MONITOR_ID'])
         if not n in _monitors:
             _monitors[n] = []
         _monitors[n].append((msg.task, msg.arg['MONITOR_ID']))
