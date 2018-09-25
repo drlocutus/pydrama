@@ -1,7 +1,9 @@
 '''
 Framework for 'monitor' RTS clients.
 
-Author: Ryan Berthold, JAC
+Author: Ryan Berthold, EAO
+
+Example:  TODO
 '''
 
 
@@ -21,82 +23,55 @@ sequence = None
 sequence_frame = None
 sequence_batch = None
 
+# import error codes as global vars, e.g. RTSDC__NOT_INITIALISED
+rtsDClient_err_h = '/jac_sw/itsroot/install/rts/include/rtsDClient_err.h'
+rtsDClient_err_d = _drama.errors_from_header(rtsDClient_err_h)
+globals.update(rtsDClient_err_d)
+# error number to name lookup -- yagni?
+rtsDClient_err_n = {}
+for name,number in rtsDClient_err_d.items():
+    rtsDClient_err_n[number] = name
 
-# TODO: Need defs for these, from rtsDClient_err.h:
-#  RTSDC__ACTION_WHILE_SEQ_ACTIVE
-#  RTSDC__NOT_INITIALISED
-#  RTSDC__NOT_CONFIGURED
-#  RTSDC__NOT_SETUP
+
+# hack, todo read from somewhere legit
+REAL_TIME_SEQ_TASK = 'RTS'
 
 
-def task_wait(funcname, monparam, matchval, badval=-9999,
-              wait_tasks=[], path_tasks=[]):
+def tasks_complete(msg, tasks, param=None, matchval=None, badval=None):
     '''
-    Helper function to monitor a group of tasks and wait until
-    their values match an expected value.
-        funcname: Calling function for logging purposes.
-        monparam: Parameter name to monitor in remote tasks.
-        matchval: Expected value of monitored parameter.
-        badval: Failure value of monitored parameter; raises Kicked.
-        wait_tasks: Wait for these tasks' to match CONFIGURE_ID.
-        path_tasks: Cache DRAMA paths to these tasks.
+    Return True if all tasks have set param to matchval, else False.
+    If incoming msg sets task.param to badval, raise an exception.
+    This function will save 'param', 'matchval', and 'badval' if given;
+    normally these are set by the parent action to prime this function,
+    so the user callback should ignore them.
+    
+    NOTE: Since this function caches parameters, you cannot use it to
+    wait simultaneously on two different sets of tasks/params.
     '''
-    _log.debug("%s: %s=%s, !=%s, wait_tasks=%s, path_tasks=%s" % \
-               (funcname, monparam, matchval, badval, wait_tasks, path_tasks))
-    monitors = []
-    try:
-        for t in path_tasks:
-            _drama.cache_path(t)
-        for t in wait_tasks:
-            monitors.append(_drama.Monitor(t, monparam))
-        while monitors:
-            m = _drama.wait(objs=monitors)
-            if m.messages:
-                v = m.value()  # or should we pop raw messages?
-                if v == matchval:  # target task done
-                    _log.debug("%s: %s done." % (funcname, m.task))
-                    m.cancel()
-                elif v == badval:  # target task had configure trouble; kickme
-                    _log.error("%s: %s failed." % (funcname, m.task))
-                    raise _drama.Kicked(m.messages.peek_newest())
-                m.messages.clear()
-            if not m.running:
-                monitors.remove(m)
-    finally:
-        for m in monitors:
-            m.messages.clear()
-            m.cancel()
-    _log.debug("%s: done." % (funcname))
-
-
-def configure_wait(CONFIGURE_ID, wait_tasks=[], path_tasks=[]):
-    '''
-    Call this from your CONFIGURE callback if you need to
-    wait for other tasks to finish their CONFIGURE actions.
-    Supply two lists of task names:
-        wait_tasks: Wait for these tasks' to match CONFIGURE_ID.
-        path_tasks: Cache DRAMA paths to these tasks.
-    '''
-    task_wait("configure_wait",
-              "CONFIGURE_ID", CONFIGURE_ID, -9999, wait_tasks, path_tasks)
-
-
-def setup_sequence_wait(SETUP_SEQ_ID, wait_tasks=[], path_tasks=[]):
-    '''
-    Call this from your SETUP_SEQUENCE callback if you need to
-    wait for other tasks to finish their SETUP_SEQUENCE actions.
-    Supply two lists of task names:
-        wait_tasks: Wait for these tasks' SETUP_SEQ_ID to match mine.
-        path_tasks: Cache DRAMA paths to these tasks.
-    Any wait_tasks not in the TASKS list are moved to path_tasks.
-    '''
-    tasks = _drama.get_param("TASKS").split()
-    for t in wait_tasks[:]:  # iterate over a copy -- remove() paranoia
-        if not t in tasks:
-            wait_tasks.remove(t)
-            path_tasks.append(t)
-    task_wait("setup_sequence_wait",
-              "SETUP_SEQ_ID", SETUP_SEQ_ID, -9999, wait_tasks, path_tasks)
+    if param is not None:
+        _log.debug('tasks_complete reset: %s %s %s', param, matchval, badval)
+        tasks_complete.param = param
+        tasks_complete.matchval = matchval
+        tasks_complete.badval = badval
+        tasks_complete.tids = None
+        return
+    if tasks_complete.tids is None:
+        tids = {}  # transid: (taskname, monid)
+        for t in tasks:
+            tids[_drama.monitor(t, tasks_complete.param)] = [t,None]
+        tasks_complete.tids = tids
+    if msg.reason == _drama.REA_TRIGGER and msg.transid in tasks_complete.tids:
+        if msg.status == _drama.MON_STARTED:
+            tasks_complete.tids[msg.transid][1] = msg.arg['MONITOR_ID']
+        elif msg.status == _drama.MON_CHANGED:
+            _log.debug('tasks_complete msg: %s', msg)
+            v = msg.arg[tasks_complete.param]  # TODO msg.arg form?
+            if v == tasks_complete.matchval or v == tasks_complete.badval:
+                t,m = tasks_complete.tids.pop(msg.transid)
+                _drama.cancel(t,m)
+            if v == tasks_complete.badval:
+                raise _drama.BadStatus(RTSDC__GERROR, 'Task %s bad %s' % (t,tasks_complete.param))
+    return (not tasks_complete.tids)  # True if empty
 
 
 def init(user_initialise_callback=None,
@@ -109,11 +84,6 @@ def init(user_initialise_callback=None,
     Call this function after drama.init() to set up RTS parameters,
     register INITIALISE/CONFIGURE/SETUP_SEQUENCE/SEQUENCE actions,
     and register user callbacks for those actions.
-    
-    Notes on user callbacks:
-        - They are invoked with the same *args/**kwargs as their actions.
-        - They should reraise any exceptions they catch so the actions
-          can do proper cleanup.
     '''
     _log.debug("init: setting up parameters.")
     _drama.set_param("CONFIGURE_ID", -1)
@@ -152,26 +122,31 @@ def init(user_initialise_callback=None,
     _log.debug("init: done.")
 
 
-def INITIALISE(*args, **kwargs):
+def INITIALISE(msg):
     '''
     Reset progress parameters, get state spool params (STSPL_*),
     invoke user initialise callback, then set INITIALISED=1.
     '''
-    _log.debug("INITIALISE: setting params, checking args.")
-    _drama.set_param("INITIALISED", 0)
-    _drama.set_param("CONFIGURED", 0)
-    _drama.set_param("SETUP", 0)
-    _drama.set_param("IN_SEQUENCE", 0)
-    _drama.set_param("SIMULATE", kwargs.get("SIMULATE", 32767))  # ???
-    _drama.set_param("STSPL_TOTAL", kwargs.get("STSPL_TOTAL", 1))
-    _drama.set_param("STSPL_START", kwargs.get("STSPL_START", 0))
+    ret = None
+    if msg.reason == _drama.REA_OBEY:
+        _log.debug("INITIALISE: setting params, checking args.")
+        _drama.set_param("INITIALISED", 0)
+        _drama.set_param("CONFIGURED", 0)
+        _drama.set_param("SETUP", 0)
+        _drama.set_param("IN_SEQUENCE", 0)
+        _drama.set_param("SIMULATE", msg.arg.get("SIMULATE", 32767))  # bitmask
+        _drama.set_param("STSPL_TOTAL", msg.arg.get("STSPL_TOTAL", 1))
+        _drama.set_param("STSPL_START", msg.arg.get("STSPL_START", 0))
     
     global initialise
     if initialise is not None:
         _log.debug("INITIALISE: calling user callback.")
-        ret = initialise(*args, **kwargs)
+        ret = initialise(msg)
     else:
         _log.debug("INITIALISE: no user callback.")
+    
+    if _drama.rescheduled():
+        return ret
     
     _log.debug("INITIALISE: setting INITIALISED=1.")
     _drama.set_param("INITIALISED", 1)
@@ -180,38 +155,48 @@ def INITIALISE(*args, **kwargs):
     return ret
 
 
-def CONFIGURE(CONFIGURATION="", CONFIGURE_ID=1, ENGIN_MODE=0, *args, **kwargs):
+def CONFIGURE_ARGS(CONFIGURATION="", CONFIGURE_ID=1, ENGIN_MODE=0, *args, **kwargs):
+    return CONFIGURATION, CONFIGURE_ID, ENGIN_MODE
+    
+
+def CONFIGURE(msg):
     '''
     Load up the CONFIGURATION xml file, invoke user callback,
     and announce our completion by setting CONFIGURE_ID.
     '''
+    ret = None
     try:
-        _log.debug("CONFIGURE: checking progress params.")
-        if not _drama.get_param("INITIALISED"):
-            raise _drama.BadStatus(RTSDC__NOT_INITIALISED,
-                                   "CONFIGURE: not yet initialised")
-        if _drama.get_param("IN_SEQUENCE"):
-            raise _drama.BadStatus(RTSDC__ACTION_WHILE_SEQ_ACTIVE,
-                                   "CONFIGURE: sequence still active")
-        
-        _log.debug("CONFIGURE: setting params.")
-        _drama.set_param("CONFIGURED", 0)
-        _drama.set_param("CONFIGURE_ID", -1)
-        _drama.set_param("ENGIN_MODE", ENGIN_MODE)
-        
-        if CONFIGURATION:
-            _drama.set_param("CONFIGURATION",
-                             _drama.obj_from_xml(CONFIGURATION))
+        if msg.reason == _drama.REA_OBEY:
+            _log.debug("CONFIGURE: checking readiness.")
+            if not _drama.get_param("INITIALISED"):
+                raise _drama.BadStatus(RTSDC__NOT_INITIALISED,
+                                       "CONFIGURE: not yet initialised")
+            if _drama.get_param("IN_SEQUENCE"):
+                raise _drama.BadStatus(RTSDC__ACTION_WHILE_SEQ_ACTIVE,
+                                       "CONFIGURE: sequence still active")
+            args,kwargs = _drama.parse_argument(msg.arg)
+            CONFIGURATION, CONFIGURE_ID, ENGIN_MODE = CONFIGURE_ARGS(*args,**kwargs)
+            _log.debug("CONFIGURE: setting params.")
+            _drama.set_param("CONFIGURED", 0)
+            _drama.set_param("CONFIGURE_ID", -1)
+            _drama.set_param("ENGIN_MODE", ENGIN_MODE)
+            if CONFIGURATION:
+                _drama.set_param("CONFIGURATION",
+                                 _drama.obj_from_xml(CONFIGURATION))
+            # cache CONFIGURE_ID for future calls
+            tasks_complete(msg,[], 'CONFIGURE_ID', CONFIGURE_ID, -9999)
         
         global configure
         if configure is not None:
             _log.debug("CONFIGURE: calling user callback.")
-            ret = configure(CONFIGURATION=CONFIGURATION,
-                            CONFIGURE_ID=CONFIGURE_ID,
-                            ENGIN_MODE=ENGIN_MODE, *args, **kwargs)
+            ret = configure(msg)
         else:
             _log.debug("CONFIGURE: no user callback.")
         
+        if _drama.rescheduled():
+            return ret
+        
+        CONFIGURE_ID = tasks_complete.matchval  # retrieve cached value
         _log.debug("CONFIGURE: setting CONFIGURE_ID=%d" % (CONFIGURE_ID))
         _drama.set_param("CONFIGURE_ID", CONFIGURE_ID)
         _drama.set_param("CONFIGURED", 1)
@@ -224,10 +209,14 @@ def CONFIGURE(CONFIGURATION="", CONFIGURE_ID=1, ENGIN_MODE=0, *args, **kwargs):
         raise
         
 
-def SETUP_SEQUENCE(SETUP_SEQ_ID=1, *args, **kwargs):
+def SETUP_SEQUENCE_ARGS(SETUP_SEQ_ID=1, *args, **kwargs):
+    return SETUP_SEQ_ID
+    
+
+def SETUP_SEQUENCE(msg):
     '''
     Get args, invoke user callback, publish SETUP_SEQ_ID.
-    There are many kwargs available that we don't bother with;
+    There are many kwargs available that we don't bother with here;
     get them yourself in your user callback if you need them:
         SOURCE: if does not start with REFERENCE, must start with SCIENCE.
         INDEX: [0,32766]
@@ -247,32 +236,40 @@ def SETUP_SEQUENCE(SETUP_SEQ_ID=1, *args, **kwargs):
         BB_TEMP: [-99999.0, 80.0] defl 10.0
         SHUT_FRAC: [0.0, 1.0], defl 0.0
         HEAT_CUR: [-99999, 131071]
-        
     '''
+    ret = None
     try:
-        _log.debug("SETUP_SEQUENCE: checking progress params.")
-        if not _drama.get_param("INITIALISED"):
-            raise _drama.BadStatus(RTSDC__NOT_INITIALISED,
-                                   "SETUP_SEQUENCE: not yet initialised")
-        if not _drama.get_param("CONFIGURED"):
-            raise _drama.BadStatus(RTSDC__NOT_CONFIGURED,
-                                   "SETUP_SEQUENCE: not yet configured")
-        if _drama.get_param("IN_SEQUENCE"):
-            raise _drama.BadStatus(RTSDC__ACTION_WHILE_SEQ_ACTIVE,
-                                   "SETUP_SEQUENCE: sequence still active")
-        
-        _log.debug("SETUP_SEQUENCE: setting params.")
-        _drama.set_param("SETUP", 0)
-        _drama.set_param("SETUP_SEQ_ID", -1)
-        _drama.set_param("TASKS", kwargs.get("TASKS", "").upper())
+        if msg.reason == _drama.REA_OBEY:
+            _log.debug("SETUP_SEQUENCE: checking readiness.")
+            if not _drama.get_param("INITIALISED"):
+                raise _drama.BadStatus(RTSDC__NOT_INITIALISED,
+                                       "SETUP_SEQUENCE: not yet initialised")
+            if not _drama.get_param("CONFIGURED"):
+                raise _drama.BadStatus(RTSDC__NOT_CONFIGURED,
+                                       "SETUP_SEQUENCE: not yet configured")
+            if _drama.get_param("IN_SEQUENCE"):
+                raise _drama.BadStatus(RTSDC__ACTION_WHILE_SEQ_ACTIVE,
+                                       "SETUP_SEQUENCE: sequence still active")
+            args,kwargs = _drama.parse_argument(msg.arg)
+            SETUP_SEQ_ID = SETUP_SEQUENCE_ARGS(*args,**kwargs)
+            _log.debug("SETUP_SEQUENCE: setting params.")
+            _drama.set_param("SETUP", 0)
+            _drama.set_param("SETUP_SEQ_ID", -1)
+            _drama.set_param("TASKS", msg.arg.get("TASKS", "").upper())
+            # cache SETUP_SEQ_ID for future calls
+            tasks_complete(msg,[], 'SETUP_SEQ_ID', SETUP_SEQ_ID, -9999)
         
         global setup_sequence
         if setup_sequence is not None:
             _log.debug("SETUP_SEQUENCE: calling user callback.")
-            ret = setup_sequence(SETUP_SEQ_ID=SETUP_SEQ_ID, *args, **kwargs)
+            ret = setup_sequence(msg)
         else:
             _log.debug("SETUP_SEQUENCE: no user callback.")
         
+        if _drama.rescheduled():
+            return ret
+        
+        SETUP_SEQ_ID = tasks_complete.matchval  # retrieve cached value
         _log.debug("SETUP_SEQUENCE: setting SETUP_SEQ_ID=%d" % (SETUP_SEQ_ID))
         _drama.set_param("SETUP_SEQ_ID", SETUP_SEQ_ID)
         _drama.set_param("SETUP", 1)
@@ -285,7 +282,11 @@ def SETUP_SEQUENCE(SETUP_SEQ_ID=1, *args, **kwargs):
         raise
 
 
-def SEQUENCE(START=1, END=2, DWELL=1, *args, **kwargs):
+def SEQUENCE_ARGS(START=1, END=2, DWELL=1, *args, **kwargs):
+    return START, END, DWELL
+
+
+def SEQUENCE(msg):
     '''
     Does the following:
         - Check progress params
@@ -298,96 +299,107 @@ def SEQUENCE(START=1, END=2, DWELL=1, *args, **kwargs):
             modify array in-place or return a new one.
         - Once done, clear IN_SEQUENCE and SEQUENCE_ID
     '''
+    ret = None
     try:
-        _log.debug("SEQUENCE: checking progress params.")
-        if not _drama.get_param("INITIALISED"):
-            raise _drama.BadStatus(RTSDC__NOT_INITIALISED,
-                                   "SEQUENCE: not yet initialised")
-        if not _drama.get_param("CONFIGURED"):
-            raise _drama.BadStatus(RTSDC__NOT_CONFIGURED,
-                                   "SEQUENCE: not yet configured")
-        if not _drama.get_param("SETUP"):
-            raise _drama.BadStatus(RTSDC__NOT_SETUP,
-                                   "SEQUENCE: not yet setup")
+        if msg.reason == _drama.REA_OBEY:
+            _log.debug("SEQUENCE: checking readiness.")
+            if not _drama.get_param("INITIALISED"):
+                raise _drama.BadStatus(RTSDC__NOT_INITIALISED,
+                                       "SEQUENCE: not yet initialised")
+            if not _drama.get_param("CONFIGURED"):
+                raise _drama.BadStatus(RTSDC__NOT_CONFIGURED,
+                                       "SEQUENCE: not yet configured")
+            if not _drama.get_param("SETUP"):
+                raise _drama.BadStatus(RTSDC__NOT_SETUP,
+                                       "SEQUENCE: not yet setup")
+            args,kwargs = _drama.parse_argument(msg.arg)
+            SEQUENCE.start, SEQUENCE.end, SEQUENCE.dwell = SEQUENCE_ARGS(*args,**kwargs)
+            _log.debug("SEQUENCE: setting params.")
+            _drama.set_param("IN_SEQUENCE", 0)
+            _drama.set_param("START", SEQUENCE.start)
+            _drama.set_param("END", SEQUENCE.end)
+            _drama.set_param("DWELL", SEQUENCE.dwell)
+            _drama.set_param("STSPL_BUFFCOUNT", 0)
+            _drama.set_param("STSPL_INDEX", 1)
+            SEQUENCE.stspl_total = _drama.get_param("STSPL_TOTAL")
+            SEQUENCE.stspl_start = _drama.get_param("STSPL_START")
+            SEQUENCE.stspl_publish = SEQUENCE.start + SEQUENCE.stspl_total + SEQUENCE.stspl_start - 1
+            if SEQUENCE.stspl_publish > SEQUENCE.end:
+                SEQUENCE.stspl_publish = SEQUENCE.end
+            _drama.set_param("STSPL_PUBLISH", SEQUENCE.stspl_publish)
+            _log.debug("SEQUENCE: starting RTS.STATE monitor.")
+            SEQUENCE.transid = _drama.monitor(REAL_TIME_SEQ_TASK, "STATE")
+            SEQUENCE.state = []
+            SEQUENCE.i = SEQUENCE.start - 1
         
-        _log.debug("SEQUENCE: setting params.")
-        _drama.set_param("IN_SEQUENCE", 0)  # no check?
-        _drama.set_param("START", START)
-        _drama.set_param("END", END)
-        _drama.set_param("DWELL", DWELL)
-        _drama.set_param("STSPL_BUFFCOUNT", 0)
-        _drama.set_param("STSPL_INDEX", 1)
-        stspl_total = _drama.get_param("STSPL_TOTAL")
-        stspl_start = _drama.get_param("STSPL_START")
-        stspl_publish = START + stspl_total + stspl_start - 1
-        if stspl_publish > END:
-            stspl_publish = END
-        _drama.set_param("STSPL_PUBLISH", stspl_publish)
-        
-        global sequence
+        global sequence, sequence_frame, sequence_batch
         if sequence is not None:
             _log.debug("SEQUENCE: calling user callback.")
-            sequence(START=START, END=END, DWELL=DWELL, *args, **kwargs)
+            ret = sequence(msg)
         else:
             _log.debug("SEQUENCE: no user callback.")
         
+        if not _drama.rescheduled():
+            _drama.reschedule()
+        
+        if msg.reason == _drama.REA_TRIGGER and msg.transid == SEQUENCE.transid:
+            if msg.status == _drama.MON_STARTED:
+                SEQUENCE.monid = msg.arg['MONITOR_ID']
+            elif msg.status == _drama.MON_CHANGED:
+                if not _drama.get_param("IN_SEQUENCE"):  # ignore current state
+                    _drama.set_param("IN_SEQUENCE", 1)
+                    _drama.set_param("SEQUENCE_ID", SEQUENCE.start)
+                else:  # in sequence
+                    # DEBUG: not sure yet what to expect here
+                    _log.debug("SEQUENCE msg: %s", msg)
+                    rts_state = msg.arg['STATE']
+                    for rts_frame in rts_state:
+                        # TODO: check continuity
+                        SEQUENCE.i += 1
+                        if SEQUENCE.i == SEQUENCE.end:
+                            _drama.cancel(REAL_TIME_SEQ_TASK, SEQUENCE.monid)
+                        frame = {"NUMBER":SEQUENCE.i}
+                        if sequence_frame:
+                            frame = sequence_frame(frame) or frame
+                        SEQUENCE.state.append(frame)
+                        if SEQUENCE.i == SEQUENCE.stspl_publish:
+                            SEQUENCE.stspl_publish += SEQUENCE.stspl_total
+                            if SEQUENCE.stspl_publish > SEQUENCE.end:
+                                SEQUENCE.stspl_publish = SEQUENCE.end
+                            if sequence_batch:
+                                SEQUENCE.state = sequence_batch(SEQUENCE.state) or SEQUENCE.state
+                            _drama.set_param("STATE", SEQUENCE.state)
+                            SEQUENCE.state = []
+                            _drama.set_param("STSPL_INDEX", 1)
+                            _drama.set_param("STSPL_PUBLISH", SEQUENCE.stspl_publish)
+                            _drama.set_param("STSPL_BUFFCOUNT",
+                                             _drama.get_param("STSPL_BUFFCOUNT")+1)
+                        else:
+                            _drama.set_param("STSPL_INDEX",
+                                             _drama.get_param("STSPL_INDEX")+1)
+                            
+        if msg.reason == _drama.REA_COMPLETE and msg.transid == SEQUENCE.transid:
+            _log.debug("SEQUENCE: done.")
+            _drama.reschedule(False)
+            _drama.set_param("IN_SEQUENCE", 0)
+            _drama.set_param("SEQUENCE_ID", -1)
+        
+        if msg.reason == drama.REA_KICK:
+            # bail out and let the auto-cancel handle the monitor, if running.
+            _drama.reschedule(False)
+            raise _drama.BadStatus(RTSDC__GERROR, 'Kicked during SEQUENCE')
+        
+        # TODO: handle unexpected entry reasons?
+        # if user callback is doing something exotic, we can't know.
+        # might just have to log it without raising an error.
+        
+        return ret
+        
     except:
-        # I'm not sure why we do this even on error
-        _drama.set_param("SEQUENCE_ID", START)
-        raise
-    
-    rts = None
-    try:
-        _log.debug("SEQUENCE: starting RTS.STATE monitor.")
-        _drama.set_param("IN_SEQUENCE", 1)
-        rts = Monitor(REAL_TIME_SEQ_TASK, "STATE")
-        while not rts.messages:
-            rts.wait()
-        rts.messages.clear()  # ignore current state
-    except:
-        if rts is not None:
-            rts.cancel()
-        raise
-    finally:
-        # Again, always set this regardless of errors
-        _drama.set_param("SEQUENCE_ID", START)
-    
-    try:
-        i = START - 1
-        state = []
-        _log.debug("SEQUENCE: starting monitor loop.")
-        while rts.running:
-            rts.wait()
-            while rts.messages:
-                rts_state = rts.pop()
-                for rts_frame in rts_state:
-                    # TODO: check continuity
-                    i += 1
-                    if i == END:
-                        rts.cancel()
-                    frame = {"NUMBER": i}
-                    if sequence_frame:
-                        frame = sequence_frame(frame) or frame
-                    state.append(frame)
-                    if i == stspl_publish:
-                        stspl_publish += stspl_total
-                        if stspl_publish > END:
-                            stspl_publish = END
-                        if sequence_batch:
-                            state = sequence_batch(state) or state
-                        _drama.set_param("STATE", state)
-                        state = []
-                        _drama.set_param("STSPL_INDEX", 1)
-                        _drama.set_param("STSPL_PUBLISH", stspl_publish)
-                        _drama.set_param("STSPL_BUFFCOUNT",
-                                         _drama.get_param("STSPL_BUFFCOUNT")+1)
-                    else:
-                        _drama.set_param("STSPL_INDEX",
-                                         _drama.get_param("STSPL_INDEX")+1)
-        _log.debug("SEQUENCE: monitor loop done.")
-    finally:
-        rts.cancel()
-        rts.messages.clear()
+        # set good SEQUENCE_ID first to wake up the RTS
+        _drama.set_param("SEQUENCE_ID", SEQUENCE.start)
         _drama.set_param("IN_SEQUENCE", 0)
         _drama.set_param("SEQUENCE_ID", -1)
+        raise
+    
 
