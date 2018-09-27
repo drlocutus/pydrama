@@ -192,6 +192,7 @@ INVPATH       = DITS__INVPATH
 UNEXPMSG      = DITS__UNEXPMSG
 EXITHANDLER   = DITS__EXITHANDLER
 
+# TODO expose this
 _entry_reason_string = {
     DITS_REA_OBEY:             "DITS_REA_OBEY",
     DITS_REA_KICK:             "DITS_REA_KICK",
@@ -581,6 +582,10 @@ def parse_argument(arg):
     Given dict, return positional arg list and kw arg dict (args, kwargs).
     Input fields named 'Argument<n>' are pulled out to
     create the positional arg list.
+    
+    NOTE: This function can return objects with references to those in the
+    given arg, or the given arg itself.  Modifying the returned objects could
+    therefore modify the original arg -- be careful.
     '''
     if arg is None:
         return [],{}
@@ -588,12 +593,16 @@ def parse_argument(arg):
         return arg,{}
     elif not isinstance(arg, dict):
         return [arg],{}
-    kwargs = arg
+    kwargs = {}
     pargs = {}
-    for k in kwargs.keys():
-        if k.startswith('Argument'):
-            pargs[int(k[8:])] = kwargs[k]
-            del kwargs[k]
+    for k in arg.keys():
+        if len(k) > 8 and k.startswith('Argument'):
+            try:
+                pargs[int(k[8:])] = arg[k]
+            except ValueError:
+                kwargs[k] = arg[k]
+        else:
+            kwargs[k] = arg[k]
     pargs = [pargs[x] for x in sorted(pargs.keys())]
     return pargs,kwargs
 
@@ -780,6 +789,8 @@ class TransId:
         Wait up to 'seconds' for a message on this transid.
         If 'seconds' is None (default), no timeout (wait forever).
         Return Message instance.
+        
+        TODO: handle absolute timestamps, ala reschedule().
         '''
         cdef DitsTransIdType ctransid = <DitsTransIdType>(<ulong>self.transid)
         cdef DitsDeltaTimeType delay
