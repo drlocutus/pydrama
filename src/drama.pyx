@@ -1579,7 +1579,7 @@ def run(tk=None, hz=50):
             _log.debug('run: calling get_fd_sets()')
             r,w,x = get_fd_sets()
             sr,sw,sx = [],[],[]
-            _log.debug('run: select(%s,%s,%s,%g)', r,w,x,timeout_seconds)
+            _log.debug('run: select(%s,%s,%s,%s)', r,w,x,timeout_seconds)
             try:
                 sr,sw,sx = _select.select(r,w,x, timeout_seconds)
             except _select.error as e:
