@@ -1082,16 +1082,13 @@ def _msgout(m):
     Also copies message to JIT_MSG_OUT parameter for external monitors.
     '''
     cdef StatusType status = 0
-    m = str(m)
-    # MsgOut doesn't handle empty strings properly
-    if not m:
-        m = ' '
+    m = str(m) or ' '  # MsgOut doesn't handle empty strings properly
     MsgOut(&status, m)
     if status != 0:
         raise BadStatus(status, "MsgOut(%s)" % (m) )
     # emulate jit_MsgOut, if task initialized
-    if _fd != -1:
-        set_param("JIT_MSG_OUT", m)
+    #if _fd != -1:
+    #    set_param("JIT_MSG_OUT", m)
 
 
 def _ersrep(e):
@@ -1108,18 +1105,18 @@ def _ersrep(e):
     '''
     cdef StatusType status = 0
     e = str(e)
-    flags = ERS_M_NOFMT | ERS_M_HIGHLIGHT
+    flags = 0  #ERS_M_NOFMT | ERS_M_HIGHLIGHT
     ErsRep(flags, &status, e)
     if status != 0:
         raise BadStatus(status, "ErsRep(%s)" % (e) )
     # I'm not sure if this is correct --
     #   maybe ersrep needs to allow multiple messages to queue up?
     #   maybe MESSAGE *has* to be 200 chars long?
-    if _fd != -1:
-        set_param("JIT_ERS_OUT", {'TASKNAME': _taskname,
-                                  'MESSAGE': [e],
-                                  'FLAGS': [_numpy.int32(flags)],
-                                  'STATUS': [_numpy.int32(0)]} )
+    #if _fd != -1:
+    #    set_param("JIT_ERS_OUT", {'TASKNAME': _taskname,
+    #                              'MESSAGE': [e],
+    #                              'FLAGS': [_numpy.int32(flags)],
+    #                              'STATUS': [_numpy.int32(0)]} )
 
 
 def _ersout(e):
@@ -1134,16 +1131,16 @@ def _ersout(e):
     '''
     cdef StatusType status = 0
     e = str(e)
-    flags = ERS_M_NOFMT | ERS_M_HIGHLIGHT
+    flags = 0  #ERS_M_NOFMT | ERS_M_HIGHLIGHT
     ErsOut(flags, &status, e)
     if status != 0:
         raise BadStatus(status, "ErsOut(%s)" % (e) )
     # TODO is this correct?
-    if _fd != -1:
-        set_param("JIT_ERS_OUT", {'TASKNAME': _taskname,
-                                  'MESSAGE': [e],
-                                  'FLAGS': [_numpy.int32(flags)],
-                                  'STATUS': [_numpy.int32(0)]} )
+    #if _fd != -1:
+    #    set_param("JIT_ERS_OUT", {'TASKNAME': _taskname,
+    #                              'MESSAGE': [e],
+    #                              'FLAGS': [_numpy.int32(flags)],
+    #                              'STATUS': [_numpy.int32(0)]} )
 
 
 def _wrap(s):
