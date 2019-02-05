@@ -1,4 +1,4 @@
-#!/local/python/bin/python2
+#!/local/python3/bin/python3
 
 from jac_sw import uae
 import numpy
