@@ -511,7 +511,10 @@ cdef object _obj_from_sds(SdsIdType id):
             n = sbuf.find(b'\0')
             if n >= 0:
                 sbuf = sbuf[:n]
-            sbuf = str(sbuf.decode())
+            try:
+                sbuf = str(sbuf.decode())
+            except UnicodeDecodeError:
+                sbuf = str(sbuf.decode('latin-1'))
             _log.debug('_obj_from_sds: return sbuf %s', sbuf)
             return sbuf
         dtype = '|S%d' % (dims[-1])
@@ -526,7 +529,10 @@ cdef object _obj_from_sds(SdsIdType id):
         if _sys.version[0] == '3':
             obj = obj.astype(object)
             for i,x in _numpy.ndenumerate(obj):
-                obj[i] = x.decode()
+                try:
+                    obj[i] = x.decode()
+                except UnicodeDecodeError:
+                    obj[i] = x.decode('latin-1')
             obj = obj.astype(str)
         _log.debug('_obj_from_sds: return obj %s', obj)
         return obj
