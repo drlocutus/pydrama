@@ -71,7 +71,7 @@ sequence_batch = None
 # import error codes as global vars, e.g. RTSDC__NOT_INITIALISED
 rtsDClient_err_h = '/jac_sw/itsroot/install/rts/include/rtsDClient_err.h'
 rtsDClient_err_d = _drama.errors_from_header(rtsDClient_err_h)
-globals.update(rtsDClient_err_d)
+globals().update(rtsDClient_err_d)
 # error number to name lookup -- yagni?
 rtsDClient_err_n = {}
 for name,number in rtsDClient_err_d.items():
