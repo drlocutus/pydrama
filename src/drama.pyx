@@ -497,9 +497,9 @@ cdef object _obj_from_sds(SdsIdType id):
         return None
     if status != 0:
         raise BadStatus(status, "SdsPointer(%d)" % (id))
-    _log.debug('_obj_from_sds: calling PyBytes_FromStringAndSize(%x, %d)', <unsigned long>buf, buflen)
+    #_log.debug('_obj_from_sds: calling PyBytes_FromStringAndSize(%x, %d)', <unsigned long>buf, buflen)
     sbuf = PyBytes_FromStringAndSize(<char*>buf, buflen)
-    _log.debug('_obj_from_sds: sbuf %s: %s', type(sbuf), repr(sbuf))
+    #_log.debug('_obj_from_sds: sbuf %s: %r', type(sbuf), sbuf)
 
     # using a string as a buffer is problematic because strings are immutable
     # and numpy decides to use the buffer memory directly.
@@ -535,7 +535,7 @@ cdef object _obj_from_sds(SdsIdType id):
     dtype = _sds_code_to_dtype[code]
     _log.debug('_obj_from_sds: ndarray(%s, %s, %s)', dims, dtype, sbuf)
     obj = _numpy.ndarray(shape=dims, dtype=dtype, buffer=sbuf).copy()
-    _log.debug('_obj_from_sds: past ndarray, obj %s', repr(obj))
+    _log.debug('_obj_from_sds: past ndarray, obj %r', obj)
     #_log.debug('_obj_from_sds: trying [()]')
     #obj = obj[()]  # this will deref a scalar array or return original array.
     #_log.debug('_obj_from_sds: past [()]')
@@ -812,10 +812,11 @@ class TransId:
             and msg.status == DITS__MON_STARTED \
             and 'MONITOR_ID' in msg.arg:
             n = msg.name
-            _log.debug('wait: _monitors[%s].append(%s,%s)', n, msg.task, msg.arg['MONITOR_ID'])
+            mid = msg.arg['MONITOR_ID']
+            _log.debug('wait: _monitors[%s].append((%s,%s))', n, msg.task, mid)
             if not n in _monitors:
                 _monitors[n] = []
-            _monitors[n].append((msg.task, msg.arg['MONITOR_ID']))
+            _monitors[n].append((msg.task, mid))
         return msg
 
 
@@ -1237,7 +1238,7 @@ cdef void dispatcher(StatusType *status):
         _log.exception('dispatcher: invalid arg getting entry details')
     except BadStatus as e:
         status[0] = e.status or DITS__APP_ERROR
-        _log.exception('dispatcher: bad status getting entry details: %s' % (e))
+        _log.exception('dispatcher: bad status getting entry details: %s', e)
     except:
         status[0] = DITS__APP_ERROR
         _log.exception('dispatcher: error getting entry details')
@@ -1245,7 +1246,7 @@ cdef void dispatcher(StatusType *status):
         if status[0] != 0:
             if n is not None:
                 bs = BadStatus(status[0], '%s: bad status on entry' % (n))
-                _log.critical('%s' % (bs))
+                _log.critical('%s', bs)
             #DitsPutRequest(DITS_REQ_EXIT, &tstatus)  # doesn't work
             DitsPutRequest(DITS_REQ_END, &tstatus)
             blind_obey(_taskname, "EXIT")
@@ -1255,10 +1256,11 @@ cdef void dispatcher(StatusType *status):
     if msg.reason == DITS_REA_TRIGGER \
         and msg.status == DITS__MON_STARTED \
         and 'MONITOR_ID' in msg.arg:
-        _log.debug('dispatcher: _monitors[%s].append(%s,%s)', n, msg.task, msg.arg['MONITOR_ID'])
+        mid = msg.arg['MONITOR_ID']
+        _log.debug('dispatcher: _monitors[%s].append((%s,%s))', n, msg.task, mid)
         if not n in _monitors:
             _monitors[n] = []
-        _monitors[n].append((msg.task, msg.arg['MONITOR_ID']))
+        _monitors[n].append((msg.task, mid))
 
     try:
         _rescheduled.append(False)
@@ -1277,17 +1279,17 @@ cdef void dispatcher(StatusType *status):
                 raise BadStatus(status[0], "DitsPutArgument(%s)" % (r))
     except (TypeError, ValueError):
         status[0] = DITS__INVARG
-        _log.exception('%s: invalid argument' % (n))
+        _log.exception('%s: invalid argument', n)
     except BadStatus as e:
         status[0] = e.status or DITS__APP_ERROR
-        _log.exception('%s: bad status' % (n))
+        _log.exception('%s: bad status', n)
     except Exit as e:
         status[0] = DITS__EXITHANDLER
-        _log.debug('%s: %s', n, repr(e))
+        _log.debug('%s: %r', n, e)
         blind_obey(_taskname, "EXIT")  # DITS_REQ_EXIT doesn't work
     except:
         status[0] = DITS__APP_ERROR
-        _log.exception('%s: other error' % (n))
+        _log.exception('%s: other error', n)
     finally:
         if status[0] != 0:
             _rescheduled[-1] = False
@@ -1527,7 +1529,7 @@ def process_fd(fd):
                         raise Exit(s)
                     # ditsaltin.c ignores non-exit status errors
                     bs = BadStatus(status, s)
-                    _log.warn('%s' % (bs))
+                    _log.warn('%s', bs)
                     ErsClear(&status)
 
 
@@ -1568,7 +1570,7 @@ def run(tk=None, hz=50):
     timeout_seconds = None
     if tk is not None:
         timeout_seconds = 1.0/hz
-        _log.debug('run: will call %s.update() every %g seconds', repr(tk), timeout_seconds)
+        _log.debug('run: will call %r.update() every %g seconds', tk, timeout_seconds)
 
     try:
         while True:
@@ -1589,7 +1591,7 @@ def run(tk=None, hz=50):
                 _log.debug('run: process_fd(%s)', fd)
                 process_fd(fd)
             if tk is not None:
-                _log.debug('run: %s.update()', repr(tk))
+                _log.debug('run: %r.update()', tk)
                 tk.update()
     except Exit:
         # catch Exit() so it doesn't cause bad $? exit status
@@ -1636,7 +1638,7 @@ def stop(taskname=None):
         _altin = NULL
         if status != 0:
             bs =  BadStatus(status, "tideExit")
-            _log.warn('%s' % (bs))
+            _log.warn('%s', bs)
             status = 0
 
     # Use _fd as a guard to avoid jitStop() segfaults.
@@ -1648,7 +1650,7 @@ def stop(taskname=None):
         _fd = -1
         if status != 0:
             bs = BadStatus(status, "jitStop(%s)" % (taskname) )
-            _log.warn('%s' % (bs))
+            _log.warn('%s', bs)
 
     # Clean up remaining globals.
     _callbacks = {}
