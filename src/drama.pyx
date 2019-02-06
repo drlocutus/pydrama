@@ -337,6 +337,26 @@ cdef SdsIdType _sds_from_obj(object obj, char* name="", SdsIdType pid=0):
             kid = _sds_from_obj(obj[k], k, id)
             SdsFreeId(kid, &status)
         return id
+    elif isinstance(obj, (bytes,str)):  # worth optimizing
+        if not isinstance(obj, bytes):
+            obj = obj.encode()
+        n = obj.find(b'\0')
+        if n >= 0:
+            obj = obj[:n+1]
+        else:
+            obj = obj + b'\0'
+        cdims[0] = len(obj)
+        SdsNew(pid, name, 0, NULL, SDS_CHAR, 1, cdims, &id, &status)
+        if status != 0:
+            raise BadStatus(status, "SdsNew(%d,%s,SDS_CHAR,[%d])" % (pid, name, len(obj)))
+        SdsPut(id, len(obj), 0, <char*>obj, &status)
+        if status != 0:
+            # NOTE obj could be huge, so first 16 chars only
+            dots = ''
+            if len(obj) > 16:
+                dots = '...'
+            raise BadStatus(status, "SdsPut(%d,%d,0,%s%s)" % (id, len(obj), obj[:16], dots))
+        return id
     else:
         # cast whatever it is to a numpy array, query dtype.
         # this can end up casting everything to strings :/
@@ -349,11 +369,12 @@ cdef SdsIdType _sds_from_obj(object obj, char* name="", SdsIdType pid=0):
     # convert to byte strings; unfortunately numpy (1.15) casting ignores
     # the preferred encoding and will choke on non-ascii characters.
     if dtype.startswith("<U") or dtype.startswith(">U"):
-        #obj = _numpy.array(obj, dtype='|S')  # always uses ascii, even in py3
-        obj = obj.astype(object)
-        for i,x in _numpy.ndenumerate(obj):
-            obj[i] = x.encode()
-        obj = obj.astype(bytes)
+#        #obj = _numpy.array(obj, dtype='|S')  # always uses ascii, even in py3
+#        obj = obj.astype(object)
+#        for i,x in _numpy.ndenumerate(obj):
+#            obj[i] = x.encode()
+#        obj = obj.astype(bytes)
+        obj = _numpy.char.encode(obj)  # uses str.encode
         dtype = str(obj.dtype)
     
     # for strings, append strlen to dims; get non-struct typecode
