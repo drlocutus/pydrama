@@ -519,7 +519,9 @@ cdef object _obj_from_sds(SdsIdType id):
     if status != 0:
         raise BadStatus(status, "SdsPointer(%d)" % (id))
     #_log.debug('_obj_from_sds: calling PyBytes_FromStringAndSize(%x, %d)', <unsigned long>buf, buflen)
-    sbuf = PyBytes_FromStringAndSize(<char*>buf, buflen)
+    #sbuf = PyBytes_FromStringAndSize(<char*>buf, buflen)
+    # use a (mutable) bytearray so ndarray is WRITEABLE without needing to copy.
+    sbuf = PyByteArray_FromStringAndSize(<char*>buf, buflen)
     #_log.debug('_obj_from_sds: sbuf %s: %r', type(sbuf), sbuf)
 
     # using a string as a buffer is problematic because strings are immutable
@@ -539,7 +541,7 @@ cdef object _obj_from_sds(SdsIdType id):
             _log.debug('_obj_from_sds: return sbuf %s', sbuf)
             return sbuf
         dtype = '|S%d' % (dims[-1])
-        obj = _numpy.ndarray(shape=dims[:-1], dtype=dtype, buffer=sbuf).copy()
+        obj = _numpy.ndarray(shape=dims[:-1], dtype=dtype, buffer=sbuf)#.copy()
         # clean up the strings so they look nicer when printed;
         # trailing garbage will show up if non-null.
         for index in _numpy.ndindex(obj.shape):
@@ -548,20 +550,24 @@ cdef object _obj_from_sds(SdsIdType id):
                 obj[index] = obj[index][:n]
         # for python3, convert to str
         if _sys.version[0] == '3':
-            obj = obj.astype(object)
-            for i,x in _numpy.ndenumerate(obj):
-                try:
-                    obj[i] = x.decode()
-                except UnicodeDecodeError:
-                    obj[i] = x.decode('latin-1')
-            obj = obj.astype(str)
+#            obj = obj.astype(object)
+#            for i,x in _numpy.ndenumerate(obj):
+#                try:
+#                    obj[i] = x.decode()
+#                except UnicodeDecodeError:
+#                    obj[i] = x.decode('latin-1')
+#            obj = obj.astype(str)
+            try:
+                obj = _numpy.char.decode(obj)
+            except UnicodeDecodeError:
+                obj = _numpy.char.decode('latin-1')
         _log.debug('_obj_from_sds: return obj %s', obj)
         return obj
 
     _log.debug('_obj_from_sds: ndarray')
     dtype = _sds_code_to_dtype[code]
     _log.debug('_obj_from_sds: ndarray(%s, %s, %s)', dims, dtype, sbuf)
-    obj = _numpy.ndarray(shape=dims, dtype=dtype, buffer=sbuf).copy()
+    obj = _numpy.ndarray(shape=dims, dtype=dtype, buffer=sbuf)#.copy()
     _log.debug('_obj_from_sds: past ndarray, obj %r', obj)
     #_log.debug('_obj_from_sds: trying [()]')
     #obj = obj[()]  # this will deref a scalar array or return original array.
