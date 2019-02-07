@@ -147,6 +147,21 @@ _dtype_to_sds_code = {
     'uint64':  SDS_UI64
 }
 
+# use with array.dtype.type
+_ntype_to_sds_code = {
+    _numpy.bool_:   SDS_BYTE,
+    _numpy.float32: SDS_FLOAT,
+    _numpy.float64: SDS_DOUBLE,
+    _numpy.int8:    SDS_BYTE,
+    _numpy.int16:   SDS_SHORT,
+    _numpy.int32:   SDS_INT,
+    _numpy.int64:   SDS_I64,
+    _numpy.uint8:   SDS_UBYTE,
+    _numpy.uint16:  SDS_USHORT,
+    _numpy.uint32:  SDS_UINT,
+    _numpy.uint64:  SDS_UI64,
+}
+
 # use with array.dtype.str
 #_dtype_to_sds_code = {
 #    '|b1': SDS_BYTE,
@@ -290,7 +305,6 @@ def sds_info(id):
     cdef SdsCodeType code
     cdef long ndims
     cdef ulong cdims[7]
-    cdef SdsIdType cid
     SdsInfo(id, name, &code, &ndims, cdims, &status)
     if status != 0:
         raise BadStatus(status, "SdsInfo(%d)" % (id))
@@ -321,6 +335,20 @@ cdef SdsIdType _sds_from_obj(object obj, char* name="", SdsIdType pid=0):
     cdef StatusType status = 0
     cdef ulong cdims[7]
     cdef ulong cindex[7]
+    # the below are for simple scalars
+    cdef char ci8
+    cdef short ci16
+    cdef int ci32
+    cdef long long ci64
+    cdef unsigned char cu8
+    cdef unsigned short cu16
+    cdef unsigned int cu32
+    cdef unsigned long long cu64
+    cdef float cfloat
+    cdef double cdouble
+    cdef void* cdata
+    cdef SdsCodeType ccode
+    cdef ulong cbytes
 
     if obj is None:
         # create an undefined placeholder.  TODO: this doesn't work.
@@ -357,23 +385,128 @@ cdef SdsIdType _sds_from_obj(object obj, char* name="", SdsIdType pid=0):
                 dots = '...'
             raise BadStatus(status, "SdsPut(%d,%d,0,%s%s)" % (id, len(obj), obj[:16], dots))
         return id
+    elif isinstance(obj, _numpy.number):
+        code = _ntype_to_sds_code[obj.dtype.type]
+        SdsNew(pid, name, 0, NULL, code, 0, cdims, &id, &status)
+        if status != 0:
+            raise BadStatus(status, "SdsNew(%d,%s,%s)" % (pid, name, _sds_code_string[code]))
+        #SdsPut(id, obj.nbytes, 0, <void*>obj.data, &status)  # wrong
+        #SdsPut(id, obj.nbytes, 0, (<_numpy.ndarray>obj).data, &status)  # segfault
+        #SdsPut(id, obj.nbytes, 0, <void*>&obj[()], &status)  # can't take address of object
+        # lame, but i can't seem to get a data pointer from a numpy.number
+        if code == SDS_BYTE:
+            ci8 = obj
+            cdata = <void*>&ci8
+        elif code == SDS_SHORT:
+            ci16 = obj
+            cdata = <void*>&ci16
+        elif code == SDS_INT:
+            ci32 = obj
+            cdata = <void*>&ci32
+        elif code == SDS_I64:
+            ci64 = obj
+            cdata = <void*>&ci64
+        elif code == SDS_UBYTE:
+            cu8 = obj
+            cdata = <void*>&cu8
+        elif code == SDS_USHORT:
+            cu16 = obj
+            cdata = <void*>&cu16
+        elif code == SDS_UINT:
+            cu32 = obj
+            cdata = <void*>&cu32
+        elif code == SDS_UI64:
+            cu64 = obj
+            cdata = <void*>&cu64
+        elif code == SDS_FLOAT:
+            cfloat = obj
+            cdata = <void*>&cfloat
+        else:
+            cdouble = obj
+            cdata = <void*>&cdouble
+        SdsPut(id, obj.nbytes, 0, cdata, &status)
+        if status != 0:
+            raise BadStatus(status, "SdsPut(%d,%d,0,%s)" % (id, obj.nbytes, obj.tobytes()))
+        return id
+    elif isinstance(obj, bool):
+        ci8 = obj
+        SdsNew(pid, name, 0, NULL, SDS_BYTE, 0, cdims, &id, &status)
+        if status != 0:
+            raise BadStatus(status, "SdsNew(%d,%s,SDS_BYTE)" % (pid, name))
+        SdsPut(id, 1, 0, <void*>&ci8, &status)
+        if status != 0:
+            raise BadStatus(status, "SdsPut(%d,1,0,%s)" % (id, obj))
+        return id
+    elif isinstance(obj, float):
+        cdouble = obj
+        SdsNew(pid, name, 0, NULL, SDS_DOUBLE, 0, cdims, &id, &status)
+        if status != 0:
+            raise BadStatus(status, "SdsNew(%d,%s,SDS_DOUBLE)" % (pid, name))
+        SdsPut(id, 8, 0, <void*>&cdouble, &status)
+        if status != 0:
+            raise BadStatus(status, "SdsPut(%d,8,0,%s)" % (id, obj))
+        return id
+    elif isinstance(obj, int):
+        if obj < -2147483648:
+            ci64 = obj
+            cdata = <void*>&ci64
+            ccode = SDS_I64
+            cbytes = 8
+        elif obj < -32768:
+            ci32 = obj
+            cdata = <void*>&ci32
+            ccode = SDS_INT
+            cbytes = 4
+        elif obj < -128:
+            ci16 = obj
+            cdata = <void*>&ci16
+            ccode = SDS_SHORT
+            cbytes = 2
+        elif obj < 0:
+            ci8 = obj
+            cdata = <void*>&ci8
+            ccode = SDS_BYTE
+            cbytes = 1
+        elif obj < 256:
+            cu8 = obj
+            cdata = <void*>&cu8
+            ccode = SDS_UBYTE
+            cbytes = 1
+        elif obj < 65536:
+            cu16 = obj
+            cdata = <void*>&cu16
+            ccode = SDS_USHORT
+            cbytes = 2
+        elif obj < 4294967296:
+            cu32 = obj
+            cdata = <void*>&cu32
+            ccode = SDS_UINT
+            cbytes = 4
+        else:
+            cu64 = obj
+            cdata = <void*>&cu64
+            ccode = SDS_UI64
+            cbytes = 8
+        SdsNew(pid, name, 0, NULL, ccode, 0, cdims, &id, &status)
+        if status != 0:
+            raise BadStatus(status, "SdsNew(%d,%s,%s)" % (pid, name, _sds_code_string[ccode]))
+        SdsPut(id, cbytes, 0, cdata, &status)
+        if status != 0:
+            raise BadStatus(status, "SdsPut(%d,%d,0,%s)" % (id, cbytes, obj))
+        return id
     else:
         # cast whatever it is to a numpy array, query dtype.
         # this can end up casting everything to strings :/
-        obj = _numpy.array(obj)
+        #obj = _numpy.array(obj)
+        obj = _numpy.asanyarray(obj)  # no copy if obj is already an ndarray
         dtype = str(obj.dtype)
         #dtype = obj.dtype.str  # no real speed improvement
         shape = obj.shape
 
     # unicode (py3 str) gets type <U, 4 bytes per char with nulls.
-    # convert to byte strings; unfortunately numpy (1.15) casting ignores
-    # the preferred encoding and will choke on non-ascii characters.
+    # convert to byte strings using preferred encoding
     if dtype.startswith("<U") or dtype.startswith(">U"):
-#        #obj = _numpy.array(obj, dtype='|S')  # always uses ascii, even in py3
-#        obj = obj.astype(object)
-#        for i,x in _numpy.ndenumerate(obj):
-#            obj[i] = x.encode()
-#        obj = obj.astype(bytes)
+        #obj = _numpy.array(obj, dtype='|S')  # always uses ascii, even in py3
         obj = _numpy.char.encode(obj)  # uses str.encode
         dtype = str(obj.dtype)
     
@@ -432,6 +565,7 @@ cdef SdsIdType _sds_from_obj(object obj, char* name="", SdsIdType pid=0):
     #SdsPut(id, obj.nbytes, 0, <char*>obuf, &status)
     # cast to ctype ndarray to avoid expensive tostring() conversion
     SdsPut(id, obj.nbytes, 0, (<_numpy.ndarray>obj).data, &status)
+    #SdsPut(id, obj.nbytes, 0, <void*>obj.data, &status)  # wrong, segfault
     if status != 0:
         # NOTE obuf could be huge, so first 16 chars only :/
         dots = ''
@@ -463,10 +597,13 @@ cdef object _obj_from_sds(SdsIdType id):
 
     if id == 0:
         return None
+    
+    # RMB 20190206: Removed the _log.debug calls.
+    # Even if NOP (level>DEBUG), they take up too much time here.
 
-    _log.debug('_obj_from_sds: calling sds_info(%d)', id)
+#    _log.debug('_obj_from_sds: calling sds_info(%d)', id)
     name, code, dims = sds_info(id)
-    _log.debug('_obj_from_sds: name,code,dims: %s, %s, %s', name, code, dims)
+#    _log.debug('_obj_from_sds: name,code,dims: %s, %s, %s', name, code, dims)
 
     # dits dim/index ordering is reversed vs numpy.
     if dims is not None:
@@ -484,18 +621,18 @@ cdef object _obj_from_sds(SdsIdType id):
             obj = {}
             i = 1  # DRAMA is 1-based...WHY
             while status == 0:
-                _log.debug('_obj_from_sds: calling SdsIndex(%d)', i)
+#                _log.debug('_obj_from_sds: calling SdsIndex(%d)', i)
                 SdsIndex(id, i, &cid, &status)
                 if status != 0:
                     break
-                _log.debug('_obj_from_sds: calling sds_info(%d)', cid)
+#                _log.debug('_obj_from_sds: calling sds_info(%d)', cid)
                 cname, dummy, dummy = sds_info(cid)
-                _log.debug('_obj_from_sds: recursing on %s', cname)
+#                _log.debug('_obj_from_sds: recursing on %s', cname)
                 obj[cname] = _obj_from_sds(cid)
                 i += 1
-                _log.debug('_obj_from_sds: SdsFreeId(%d)', cid)
+#                _log.debug('_obj_from_sds: SdsFreeId(%d)', cid)
                 SdsFreeId(cid, &status)
-            _log.debug('_obj_from_sds: returning %s', obj)
+#            _log.debug('_obj_from_sds: returning %s', obj)
             return obj
         else:
             # create numpy array of python objs and fill it out
@@ -512,12 +649,38 @@ cdef object _obj_from_sds(SdsIdType id):
             return obj
 
     # for anything else we need the raw buffer
-    _log.debug('_obj_from_sds: SdsPointer(%d)', id)
+#    _log.debug('_obj_from_sds: SdsPointer(%d)', id)
     SdsPointer(id, &buf, &buflen, &status)
     if status == SDS__UNDEFINED:
         return None
     if status != 0:
         raise BadStatus(status, "SdsPointer(%d)" % (id))
+    
+    # skip bytearray/ndarray conversion for simple types.
+    # NOTE we do not cast scalars to numpy types, since any operations
+    # using those values will upcast (bloat) to int64 or float64.
+    if dims is None:
+        if code == SDS_BYTE:
+            return (<char*>buf)[0]
+        elif code == SDS_UBYTE:
+            return (<unsigned char*>buf)[0]
+        elif code == SDS_SHORT:
+            return (<short*>buf)[0]
+        elif code == SDS_USHORT:
+            return (<unsigned short*>buf)[0]
+        elif code == SDS_INT:
+            return (<int*>buf)[0]
+        elif code == SDS_UINT:
+            return (<unsigned int*>buf)[0]
+        elif code == SDS_I64:
+            return (<long long*>buf)[0]
+        elif code == SDS_UI64:
+            return (<unsigned long long*>buf)[0]
+        elif code == SDS_FLOAT:
+            return (<float*>buf)[0]
+        elif code == SDS_DOUBLE:
+            return (<double*>buf)[0]
+    
     #_log.debug('_obj_from_sds: calling PyBytes_FromStringAndSize(%x, %d)', <unsigned long>buf, buflen)
     #sbuf = PyBytes_FromStringAndSize(<char*>buf, buflen)
     # use a (mutable) bytearray so ndarray is WRITEABLE without needing to copy.
@@ -529,7 +692,7 @@ cdef object _obj_from_sds(SdsIdType id):
     # NOTE use .copy() to force array memory ownership.
     
     if code == SDS_CHAR:
-        _log.debug('_obj_from_sds: SDS_CHAR')
+#        _log.debug('_obj_from_sds: SDS_CHAR')
         if dims is None or len(dims) < 2:
             n = sbuf.find(b'\0')
             if n >= 0:
@@ -538,7 +701,7 @@ cdef object _obj_from_sds(SdsIdType id):
                 sbuf = str(sbuf.decode())
             except UnicodeDecodeError:
                 sbuf = str(sbuf.decode('latin-1'))
-            _log.debug('_obj_from_sds: return sbuf %s', sbuf)
+#            _log.debug('_obj_from_sds: return sbuf %s', sbuf)
             return sbuf
         dtype = '|S%d' % (dims[-1])
         obj = _numpy.ndarray(shape=dims[:-1], dtype=dtype, buffer=sbuf)#.copy()
@@ -561,20 +724,20 @@ cdef object _obj_from_sds(SdsIdType id):
                 obj = _numpy.char.decode(obj)
             except UnicodeDecodeError:
                 obj = _numpy.char.decode('latin-1')
-        _log.debug('_obj_from_sds: return obj %s', obj)
+#        _log.debug('_obj_from_sds: return obj %s', obj)
         return obj
 
-    _log.debug('_obj_from_sds: ndarray')
+#    _log.debug('_obj_from_sds: ndarray')
     dtype = _sds_code_to_dtype[code]
-    _log.debug('_obj_from_sds: ndarray(%s, %s, %s)', dims, dtype, sbuf)
+#    _log.debug('_obj_from_sds: ndarray(%s, %s, %s)', dims, dtype, sbuf)
     obj = _numpy.ndarray(shape=dims, dtype=dtype, buffer=sbuf)#.copy()
-    _log.debug('_obj_from_sds: past ndarray, obj %r', obj)
+#    _log.debug('_obj_from_sds: past ndarray, obj %r', obj)
     #_log.debug('_obj_from_sds: trying [()]')
     #obj = obj[()]  # this will deref a scalar array or return original array.
     #_log.debug('_obj_from_sds: past [()]')
     if not obj.shape:
         obj = obj.dtype.type(obj)
-    _log.debug('_obj_from_sds: returning %s', obj)
+#    _log.debug('_obj_from_sds: returning %s', obj)
     return obj
 
 
