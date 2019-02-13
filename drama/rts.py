@@ -82,40 +82,60 @@ for name,number in rtsDClient_err_d.items():
 REAL_TIME_SEQ_TASK = 'RTS'
 
 
-def handle_sets(msg, wait_set, done_set, transid_dict, param, matchval, badval):
+class TaskWaiter(object):
     '''
-    Monitor tasks, waiting for them to set param to matchval.
-    If any task sets its param to badval, raise an exception.
-      msg: current drama.Message instance for this action
-      wait_set: given tasks to wait on
-      done_set: modified to remember finished tasks
-      transid_dict: modified to remember [transid]:[taskname,monid]
-      param: given parameter name to monitor
-      matchval: given value to wait for
-      badval: given value to choke on
+    Used by CONFIGURE and SETUP_SEQUENCE to wait for a set of tasks to finish.
+    They create an instance of this class on OBEY, attach the instance to the
+    function, and use the same instance on subsequent calls.
+    '''
+    def __init__(self, param, matchval, badval):
+        '''
+        param: Parameter to monitor in each task, CONFIGURE_ID or SETUP_SEQ_ID.
+        matchval: The value indicating success in the monitored tasks.
+        badval:   The value indicating failure in the monitored tasks.
+        '''
+        self.param = param
+        self.matchval = matchval
+        self.badval = badval
+        self.transid_dict = {}  # [transid]:[taskname,monid]
+        self.wait_set = set()
+        self.done_set = set()  # only ADD to this set!
+        _log.debug('TaskWaiter(%s, %s, %s)', param, matchval, badval)
     
-    You can check completion using issubset or the equivalent set notation:
-      if not (wait_set <= done_set):
-        drama.reschedule()
-    '''
-    new_tasks = wait_set - set(x[0] for x in transid_dict.values())
-    for t in new_tasks:
-        _log.debug('handle_sets creating monitor on task %s', t)
-        transid_dict[_drama.monitor(t, param)] = [t,None]
-    if msg.reason == _drama.REA_TRIGGER and msg.transid in transid_dict:
-        _log.debug('handle_sets msg: %s', msg)
-        if msg.status == _drama.MON_STARTED:
-            transid_dict[msg.transid][1] = msg.arg['MONITOR_ID']
-        elif msg.status == _drama.MON_CHANGED:
-            v = msg.arg[param]  # TODO msg.arg form?
-            if v in (matchval, badval):
-                t,m = transid_dict[msg.transid]
-                _drama.cancel(t,m)
-                done_set.add(t)
-            if v == badval:
-                raise _drama.BadStatus(RTSDC__GERROR, 'Task %s bad %s' % (t,param))
-            
-            
+    def start_monitors(self):
+        '''
+        Start monitors on any new tasks in self.wait_set.
+        Called after user callback has (maybe) modified self.wait_set.
+        '''
+        new_tasks = self.wait_set - set(x[0] for x in self.transid_dict.values())
+        for task in new_tasks:
+            _log.debug('TaskWaiter starting monitor %s:%s', task, self.param)
+            self.transid_dict[_drama.monitor(task, self.param)] = [task,None]
+    
+    def check_monitors(self, msg):
+        '''
+        Check msg for task completion and add to done_set.
+        Called before user callback.
+        Raise an exception if any task sets its param to badval.
+        '''
+        if msg.reason == _drama.REA_TRIGGER and msg.transid in self.transid_dict:
+            _log.debug('TaskWaiter got msg %s', msg)
+            if msg.status == _drama.MON_STARTED:
+                self.transid_dict[msg.transid][1] = msg.arg['MONITOR_ID']
+            elif msg.status == _drama.MON_CHANGED:
+                val = msg.arg[param]  # TODO msg.arg form?
+                if val in (matchval, badval):
+                    task,mid = self.transid_dict[msg.transid]
+                    _drama.cancel(task,mid)
+                    self.done_set.add(task)
+                if val == badval:
+                    raise _drama.BadStatus(RTSDC__GERROR, 'Task %s bad %s' % (task, self.param))
+    
+    def waiting(self):
+        '''
+        Return True if done_set does not contain all tasks in wait_set.
+        '''
+        return not (self.wait_set <= self.done_set)
 
 
 def init(user_initialise_callback=None,
@@ -180,9 +200,9 @@ def INITIALISE(msg):
         _drama.set_param("CONFIGURED", 0)
         _drama.set_param("SETUP", 0)
         _drama.set_param("IN_SEQUENCE", 0)
-        _drama.set_param("SIMULATE", msg.arg.get("SIMULATE", 32767))  # bitmask
-        _drama.set_param("STSPL_TOTAL", msg.arg.get("STSPL_TOTAL", 1))
-        _drama.set_param("STSPL_START", msg.arg.get("STSPL_START", 0))
+        _drama.set_param("SIMULATE", int(msg.arg.get("SIMULATE", 32767)))  # bitmask
+        _drama.set_param("STSPL_TOTAL", int(msg.arg.get("STSPL_TOTAL", 1)))
+        _drama.set_param("STSPL_START", int(msg.arg.get("STSPL_START", 0)))
     
     global initialise
     if initialise is not None:
@@ -202,6 +222,8 @@ def INITIALISE(msg):
 
 
 def CONFIGURE_ARGS(CONFIGURATION="", CONFIGURE_ID=1, ENGIN_MODE=0, *args, **kwargs):
+    CONFIGURE_ID = int(CONFIGURE_ID)
+    ENGIN_MODE = int(ENGIN_MODE)
     return CONFIGURATION, CONFIGURE_ID, ENGIN_MODE
     
 
@@ -229,39 +251,32 @@ def CONFIGURE(msg):
             if CONFIGURATION:
                 _drama.set_param("CONFIGURATION",
                                  _drama.obj_from_xml(CONFIGURATION))
-            # cache task sets for future calls
-            CONFIGURE.wait_set = set()
-            CONFIGURE.done_set = set()
-            CONFIGURE.transid_dict = {}
-            CONFIGURE.CONFIGURE_ID = CONFIGURE_ID
-        
-        ws = CONFIGURE.wait_set
-        ds = CONFIGURE.done_set
-        td = CONFIGURE.transid_dict
-        cid = CONFIGURE.CONFIGURE_ID
-        handle_sets(msg, ws, ds, td, 'CONFIGURE_ID', cid, -9999)
+            # cache TaskWaiter instance for future calls
+            CONFIGURE.tw = TaskWaiter('CONFIGURE_ID', CONFIGURE_ID, -9999)
+
+        tw = CONFIGURE.tw
+        tw.check_monitors(msg)
         
         global configure
         if configure is not None:
             _log.debug("CONFIGURE: calling user callback.")
-            # done_set is add-only to prevent infinite reschedules
-            dsc = ds.copy()
-            ret = configure(msg, ws, dsc)
-            ds.update(dsc)
+            dsc = tw.done_set.copy()  # add-only, prevents infinite reschedules
+            ret = configure(msg, tw.wait_set, dsc)
+            tw.done_set.update(dsc)
         else:
             _log.debug("CONFIGURE: no user callback.")
         
-        if _drama.rescheduled():
+        _log.debug("CONFIGURE: wait_set: %s, done_set: %s", tw.wait_set, tw.done_set)
+        tw.start_monitors()
+        if _drama.rescheduled():  # user rescheduled already
             return ret
-        
-        if not (ws <= ds):  # not done waiting
+        elif tw.waiting():  # outstanding tasks in wait_set
             _drama.reschedule()
             return ret
         
-        _log.debug("CONFIGURE: setting CONFIGURE_ID=%d" % (cid))
-        _drama.set_param("CONFIGURE_ID", cid)
+        _log.debug("CONFIGURE: setting CONFIGURE_ID=%d" % (tw.matchval))
+        _drama.set_param("CONFIGURE_ID", tw.matchval)
         _drama.set_param("CONFIGURED", 1)
-        
         _log.debug("CONFIGURE: done.")
         return ret
         
@@ -271,6 +286,7 @@ def CONFIGURE(msg):
         
 
 def SETUP_SEQUENCE_ARGS(SETUP_SEQ_ID=1, *args, **kwargs):
+    SETUP_SEQ_ID = int(SETUP_SEQ_ID)
     return SETUP_SEQ_ID
     
 
@@ -316,40 +332,33 @@ def SETUP_SEQUENCE(msg):
             _log.debug("SETUP_SEQUENCE: setting params.")
             _drama.set_param("SETUP", 0)
             _drama.set_param("SETUP_SEQ_ID", -1)
-            _drama.set_param("TASKS", msg.arg.get("TASKS", "").upper())
-            # cache task sets for future calls
-            SETUP_SEQUENCE.wait_set = set()
-            SETUP_SEQUENCE.done_set = set()
-            SETUP_SEQUENCE.transid_dict = {}
-            SETUP_SEQUENCE.SETUP_SEQ_ID = SETUP_SEQ_ID
+            _drama.set_param("TASKS", msg.arg.get("TASKS", "").upper())  # TODO WAIT ON THESE?
+            # cache TaskWaiter instance for future calls
+            SETUP_SEQUENCE.tw = TaskWaiter('SETUP_SEQ_ID', SETUP_SEQ_ID, -9999)
         
-        ws = SETUP_SEQUENCE.wait_set
-        ds = SETUP_SEQUENCE.done_set
-        td = SETUP_SEQUENCE.transid_dict
-        ssid = SETUP_SEQUENCE.SETUP_SEQ_ID
-        handle_sets(msg, ws, ds, td, 'SETUP_SEQ_ID', ssid, -9999)
+        tw = SETUP_SEQUENCE.tw
+        tw.check_monitors(msg)
         
         global setup_sequence
         if setup_sequence is not None:
             _log.debug("SETUP_SEQUENCE: calling user callback.")
-            # done_set is add-only to prevent infinite reschedules
-            dsc = ds.copy()
+            dsc = tw.done_set.copy()  # add-only, prevents infinite reschedules
             ret = setup_sequence(msg, ws, dsc)
-            ds.update(dsc)
+            tw.done_set.update(dsc)
         else:
             _log.debug("SETUP_SEQUENCE: no user callback.")
         
-        if _drama.rescheduled():
+        _log.debug("SETUP_SEQUENCE: wait_set: %s, done_set: %s", tw.wait_set, tw.done_set)
+        tw.start_monitors()
+        if _drama.rescheduled():  # user rescheduled already
             return ret
-        
-        if not (ws <= ds):  # not done waiting
+        elif tw.waiting():  # outstanding tasks in wait_set
             _drama.reschedule()
             return ret
         
-        _log.debug("SETUP_SEQUENCE: setting SETUP_SEQ_ID=%d" % (ssid))
-        _drama.set_param("SETUP_SEQ_ID", ssid)
+        _log.debug("SETUP_SEQUENCE: setting SETUP_SEQ_ID=%d" % (tw.matchval))
+        _drama.set_param("SETUP_SEQ_ID", tw.matchval)
         _drama.set_param("SETUP", 1)
-    
         _log.debug("SETUP_SEQUENCE: done.")
         return ret
         
