@@ -1050,6 +1050,8 @@ cdef class Path:
             if msg.reason == DITS_REA_RESCHED:
                 raise BadStatus(DITS__APP_TIMEOUT, 'Path(%s) timeout after %g seconds' % (task, seconds))
             elif msg.reason != DITS_REA_PATHFOUND:
+                if msg.status != 0:
+                    raise BadStatus(msg.status, 'DitsPathGet(%s)' % (task))
                 raise BadStatus(DITS__APP_ERROR, 'Path(%s) unexpected message: %s' % (task, msg))
         except BadStatus:
             status = 0
