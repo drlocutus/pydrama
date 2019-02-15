@@ -82,8 +82,14 @@ cdef int _fd = -1
 # Save task name for stop() and such
 _taskname = ""
 
-# Stack to track reschedules on the current action
-_rescheduled = []
+# Stack to track current action name (last index)
+_action_stack = []
+
+# Number of times each action appears in _action_stack (dispatcher depth)
+_activity = {}
+
+# Reschedule status (True/False) for each action
+_rescheduled = {}
 
 # Outstanding monitors, {action:[(task,monid),...]}
 _monitors = {}
@@ -980,11 +986,15 @@ class TransId:
     def __hash__(self):
         return hash(self.transid)
 
-    def wait(self, seconds=None):
+    def wait(self, seconds=None, dontblock=False):
         '''
         Wait up to 'seconds' for a message on this transid.
         If 'seconds' is None (default), no timeout (wait forever).
         Return Message instance.
+        
+        If 'dontblock' is True, use the DITS_M_AW_DONT_BLOCK flag.
+        Returns a Message if one is already waiting, otherwise returns None.
+        Used to clear out the message queue at action end.
         
         TODO: handle absolute timestamps, ala reschedule().
         '''
@@ -993,14 +1003,19 @@ class TransId:
         cdef DitsDeltaTimeType *delayptr = NULL
         cdef StatusType status = 0
         cdef int count = 0
+        cdef int flags = 0
+        if dontblock:
+            flags = DITS_M_AW_DONT_BLOCK
         if seconds is not None:
             s = int(seconds)
             u = int(1e6*(seconds-s))
             delayptr = &delay
             DitsDeltaTime(s, u, delayptr)
-        DitsActionTransIdWait(0, delayptr, ctransid, &count, &status)
+        DitsActionTransIdWait(flags, delayptr, ctransid, &count, &status)
         if status:
             raise BadStatus(status, "DitsActionTransIdWait")
+        if count < 0:  # only if dontblock and no waiting messages
+            return None
         # since this mechanism bypasses dispatcher for the current action,
         # duplicate the monitor-handling code for automatic cleanup later.
         msg = Message()
@@ -1016,13 +1031,19 @@ class TransId:
         return msg
 
 
-def wait(seconds=None):
+def wait(seconds=None, dontblock=False):
     '''
     Wait up to 'seconds' for a message for this action.
     If 'seconds' is None (default), no timeout (wait forever).
     Return Message instance.
+    
+    If 'dontblock' is True, use the DITS_M_AW_DONT_BLOCK flag.
+    Returns a Message if one is already waiting, otherwise returns None.
+    Used to clear out the message queue at action end.
+    
+    TODO: handle absolute timestamps, ala reschedule().
     '''
-    return TransId(0).wait(seconds)
+    return TransId(0).wait(seconds, dontblock)
 
 
 cdef class Path:
@@ -1407,7 +1428,7 @@ def reschedule(seconds=None):
             jitDelayRequest(s, &status)
     if status != 0:
         raise BadStatus(status, 'reschedule(%s)' % (seconds))
-    _rescheduled[-1] = (seconds is not False)
+    _rescheduled[_action_stack[-1]] = (seconds is not False)
 
 
 def rescheduled():
@@ -1416,7 +1437,7 @@ def rescheduled():
     Return False if not rescheduled, prior rescheduling was cancelled,
       or if this function is called outside an action.
     '''
-    return bool(_rescheduled and _rescheduled[-1])
+    return bool(_action_stack and _rescheduled[_action_stack[-1]])
 
 
 cdef void dispatcher(StatusType *status):
@@ -1461,7 +1482,9 @@ cdef void dispatcher(StatusType *status):
         _monitors[n].append((msg.task, mid))
 
     try:
-        _rescheduled.append(False)
+        _action_stack.append(n)
+        _activity[n] = _activity.get(n,0) + 1
+        _rescheduled[n] = False
         _log.debug('dispatcher: calling action %s: %s', n, _actions[n])
         r = _actions[n](msg)
         _log.debug('dispatcher: action %s returned %s', n, r)
@@ -1490,19 +1513,25 @@ cdef void dispatcher(StatusType *status):
         _log.exception('%s: other error', n)
     finally:
         if status[0] != 0:
-            _rescheduled[-1] = False
-        if not _rescheduled[-1]:
+            _rescheduled[n] = False
+        if not _rescheduled[n]:
             DitsPutRequest(DITS_REQ_END, &tstatus)
-            if n in _monitors:
-                mlist = _monitors[n]
-                while mlist:
-                    try:
-                        task, monid = mlist.pop()
-                        cancel(task, monid)
-                    except:
-                        pass
-                del _monitors[n]
-        _rescheduled.pop()
+            if _activity[n] == 1:  # no more nested calls of this action
+                # clear out any queued messages
+                while wait(dontblock=True) is not None:
+                    pass
+                # cancel any remaining monitors
+                if n in _monitors:
+                    mlist = _monitors[n]
+                    while mlist:
+                        try:
+                            task, monid = mlist.pop()
+                            cancel(task, monid)
+                        except:
+                            pass
+                    del _monitors[n]
+        _action_stack.pop()
+        _activity[n] -= 1
     _log.debug('dispatcher done.')
 
 
@@ -1815,7 +1844,7 @@ def stop(taskname=None):
     cdef StatusType status = 0
     global _taskname, _altin, _fd, _callbacks, _actions, _monitors
 
-    if _rescheduled:
+    if _action_stack:
         raise Exit('stop')
 
     for mlist in _monitors.values():

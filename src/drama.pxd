@@ -340,6 +340,9 @@ cdef extern from "DitsSys.h":
 
 cdef extern from "DitsInteraction.h":
 
+    enum:
+        DITS_M_AW_DONT_BLOCK
+    
     ctypedef struct DitsPathInfoType:
         int MessageBytes
         int MaxMessages
