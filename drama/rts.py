@@ -49,6 +49,15 @@ My main worry is that they would make things more confusing,
 since it's not necessarily obvious that the function
 is modifying done_set/wait_set and will only trigger once.
 
+--------
+
+Regarding KICKS: On kick, the main priority is to make sure the action ends
+instead of waiting forever.  The user callbacks will be called ONCE with
+REA_KICK, then the parent action will raise BadStatus to cancel any
+user reschedules.  You can still use wait() in your kick handler if necessary,
+but remember that any outstanding monitors will be canceled automatically
+when the action ends -- don't make extra work for yourself.
+
 '''
 
 
@@ -123,13 +132,13 @@ class TaskWaiter(object):
             if msg.status == _drama.MON_STARTED:
                 self.transid_dict[msg.transid][1] = msg.arg['MONITOR_ID']
             elif msg.status == _drama.MON_CHANGED:
-                val = msg.arg[param]  # TODO msg.arg form?
-                if val in (matchval, badval):
+                val = msg.arg
+                if val in (self.matchval, self.badval):
                     task,mid = self.transid_dict[msg.transid]
                     _drama.cancel(task,mid)
                     self.done_set.add(task)
-                if val == badval:
-                    raise _drama.BadStatus(RTSDC__GERROR, 'Task %s bad %s' % (task, self.param))
+                if val == self.badval:
+                    raise _drama.BadStatus(RTSDC__GERROR, 'Task %s bad %s %d' % (task, self.param, val))
     
     def waiting(self):
         '''
@@ -211,6 +220,10 @@ def INITIALISE(msg):
     else:
         _log.debug("INITIALISE: no user callback.")
     
+    if msg.reason == _drama.REA_KICK:
+        # TODO there ought to be a better status code for kicks
+        raise _drama.BadStatus(RTSDC__GERROR, "INITIALISE kicked, ending action")
+    
     if _drama.rescheduled():
         return ret
     
@@ -265,6 +278,9 @@ def CONFIGURE(msg):
             tw.done_set.update(dsc)
         else:
             _log.debug("CONFIGURE: no user callback.")
+        
+        if msg.reason == _drama.REA_KICK:
+            raise _drama.BadStatus(RTSDC__GERROR, "CONFIGURE kicked, ending action")
         
         _log.debug("CONFIGURE: wait_set: %s, done_set: %s", tw.wait_set, tw.done_set)
         tw.start_monitors()
@@ -343,10 +359,13 @@ def SETUP_SEQUENCE(msg):
         if setup_sequence is not None:
             _log.debug("SETUP_SEQUENCE: calling user callback.")
             dsc = tw.done_set.copy()  # add-only, prevents infinite reschedules
-            ret = setup_sequence(msg, ws, dsc)
+            ret = setup_sequence(msg, tw.wait_set, dsc)
             tw.done_set.update(dsc)
         else:
             _log.debug("SETUP_SEQUENCE: no user callback.")
+        
+        if msg.reason == _drama.REA_KICK:
+            raise _drama.BadStatus(RTSDC__GERROR, "SETUP_SEQUENCE kicked, ending action")
         
         _log.debug("SETUP_SEQUENCE: wait_set: %s, done_set: %s", tw.wait_set, tw.done_set)
         tw.start_monitors()
@@ -471,9 +490,7 @@ def SEQUENCE(msg):
             _drama.set_param("SEQUENCE_ID", -1)
         
         if msg.reason == drama.REA_KICK:
-            # bail out and let the auto-cancel handle the monitor, if running.
-            _drama.reschedule(False)
-            raise _drama.BadStatus(RTSDC__GERROR, 'Kicked during SEQUENCE')
+            raise _drama.BadStatus(RTSDC__GERROR, "SEQUENCE kicked, ending action")
         
         # TODO: handle unexpected entry reasons?
         # if user callback is doing something exotic, we can't know.
