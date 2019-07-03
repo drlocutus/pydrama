@@ -1311,7 +1311,7 @@ def _msgout(m):
     #    set_param("JIT_MSG_OUT", m)
 
 
-def _ersrep(e):
+def _ersrep(e, s=0):
     '''
     Calls ErsRep(ERS_M_NOFMT | ERS_M_HIGHLIGHT, STATUS__OK, str).
     Also copies message to JIT_ERS_OUT parameter (TODO is this correct?)
@@ -1323,7 +1323,7 @@ def _ersrep(e):
     TODO: Does ERS_M_HIGHLIGHT suffice for red output in JOSCON,
           or do we need to set bad status as well?
     '''
-    cdef StatusType status = 0
+    cdef StatusType status = int(s)
     e = str(e)
     flags = 0  #ERS_M_NOFMT | ERS_M_HIGHLIGHT
     ErsRep(flags, &status, e)
@@ -1339,7 +1339,7 @@ def _ersrep(e):
     #                              'STATUS': [_numpy.int32(0)]} )
 
 
-def _ersout(e):
+def _ersout(e, s=0):
     '''
     Calls ErsOut(ERS_M_NOFMT | ERS_M_HIGHLIGHT, STATUS__OK, str).
     Also copies message to JIT_ERS_OUT parameter (TODO is this correct?)
@@ -1349,7 +1349,7 @@ def _ersout(e):
     TODO: Does ERS_M_HIGHLIGHT suffice for red output in JOSCON,
           or do we need to set bad status as well?
     '''
-    cdef StatusType status = 0
+    cdef StatusType status = int(s)
     e = str(e)
     flags = 0  #ERS_M_NOFMT | ERS_M_HIGHLIGHT
     ErsOut(flags, &status, e)
@@ -1390,18 +1390,18 @@ def msgout(m):
             _msgout(m)
 
 
-def ersrep(e):
+def ersrep(e, s=0):
     if _fd >= 0:  # silently ignore if drama not initialized
         elist = _wrap(e)
         for e in elist:
-            _ersrep(e)
+            _ersrep(e,s)
 
 
-def ersout(e):
+def ersout(e, s=0):
     if _fd >= 0:  # silently ignore if drama not initialized
         elist = _wrap(e)
         for e in elist:
-            _ersout(e)
+            _ersout(e,s)
 
 
 def reschedule(seconds=None):

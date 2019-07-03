@@ -8,6 +8,8 @@ import time as _time
 import logging as _logging
 import os as _os
 import drama as _drama
+import traceback
+import sys
 
 
 class StrftimeHandler(_logging.FileHandler):
@@ -85,15 +87,38 @@ class MsgOutHandler(_logging.Handler):
         If level < WARN send formatted record via MsgOut, else via ErsOut.
         '''
         try:
+            # force use of self.formatter.formatException instead of cached value.
+            # seems ugly and intrusive to me...
+            record.exc_text = None
             msg = self.format(record)
+            record.exc_text = None
             if record.levelno < _logging.WARNING:
                 _drama.msgout(msg)
             else:
-                _drama.ersout(msg)
+                t,v,tb = sys.exc_info()
+                s = 0
+                if t == _drama.BadStatus:
+                    s = v.status
+                _drama.ersout(msg, s)
         except (KeyboardInterrupt, SystemExit):
             raise
         except:
             self.handleError(record)
+
+
+class MsgOutFormatter(_logging.Formatter):
+    '''
+    Skip lengthy exception tracebacks for msgout/ersout;
+    you should save these to a file instead.
+    '''
+    def formatException(self, exc_info):
+        if exc_info[0] == _drama.BadStatus:
+            return exc_info[1].message
+        else:
+            return ''.join(traceback.format_exception(exc_info[0], exc_info[1], None)).strip()
+    
+    def formatStack(self, stack_info):
+        return ''
 
 
 def setup(taskname=None):
@@ -120,7 +145,8 @@ def setup(taskname=None):
     stream_h.setFormatter(f)
     _logging.root.addHandler(stream_h)
     
-    f = _logging.Formatter('%(levelname)s:%(message)s')
+    #f = _logging.Formatter('%(levelname)s:%(message)s')
+    f = MsgOutFormatter('%(levelname)s:%(message)s')
     msgout_h = MsgOutHandler()
     msgout_h.setFormatter(f)
     msgout_h.setLevel(_logging.INFO)
