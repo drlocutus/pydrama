@@ -10,7 +10,7 @@ Author: Ryan Berthold, EAO
 A note on logging/debug output:
 
     This module uses the standard python 'logging' module, not jitDebug.
-    It uses __name__ for the logger name, which should be 'drama'.
+    It uses "drama" for the logger name.
     A NullHandler is installed, so you don't need to configure logging
     if you don't want to.
 
@@ -31,24 +31,6 @@ A note on logging/debug output:
     Note also that this module expects a MsgOutHandler to be installed
     so that any errors will be properly sent to the calling task;
     the module never makes any explicit MsgOut/ErsOut/ErsRep calls of its own.
-
-
-TODO: tideSetParam for pushing parameter updates back to EPICS space.
-
--------------------------------
-
-RMB 20160517
-
-Coming back to this after a long hiatus.  I've created a 'simpler'
-git branch which will do away with the greenlet-related stuff;
-python drama will act a lot like C drama with reentrant rescheduled functions.
-User will have to do their own entry-reason checks and such.
-
-It'd be nice to get rid of numpy reliance too.
-
-Another thing that might be slowing us down is constant creation/destruction
-of SDS parameters vs updating existing structures.
-
 '''
 
 
@@ -269,12 +251,20 @@ def get_status_string(status):
 
 
 class DramaException(Exception):
-    '''Common base class for DITS exceptions'''
+    '''Common base class for DITS exceptions.'''
     pass
 
+
 class Exit(DramaException):
-    '''Raise to cause task to exit'''
-    pass
+    '''
+    Raise to cause task to exit.  Calls blind_obey(_taskname, "EXIT")
+    during __init__ to ensure the task dies even the exception is caught.
+    '''
+    def __init__(self, *arg, **kwarg):
+        super(Exit, self).__init__(*arg, **kwarg)
+        blind_obey(_taskname, "EXIT")
+        _log.info('Exit(%s, %s) sent %s EXIT', arg, kwarg, _taskname)
+
 
 class BadStatus(DramaException):
     '''
@@ -1509,7 +1499,8 @@ cdef void dispatcher(StatusType *status):
     except Exit as e:
         status[0] = DITS__EXITHANDLER
         _log.debug('%s: %r', n, e)
-        blind_obey(_taskname, "EXIT")  # DITS_REQ_EXIT doesn't work
+        # Exit now sends EXIT on creation
+        #blind_obey(_taskname, "EXIT")  # DITS_REQ_EXIT doesn't work
     except:
         status[0] = DITS__APP_ERROR
         _log.exception('%s: other error', n)
@@ -1842,11 +1833,15 @@ cdef void event_wait_handler(void *client_data, StatusType *status):
         _log.debug('event_wait_handler: run_loop')
         run_loop(tk, timeout_seconds, True)
     except Exit:
-        blind_obey(_taskname, "EXIT")
+        status[0] = DITS__EXITHANDLER
+        # Exit now sends EXIT on creation
+        #blind_obey(_taskname, "EXIT")
     except TclError as e:
         blind_obey(_taskname, "EXIT")
         if e.args[0].find('application has been destroyed') < 0:
             _log.exception('event_wait_handler')
+        else:
+            status[0] = DITS__EXITHANDLER
     except:
         blind_obey(_taskname, "EXIT")
         _log.exception('event_wait_handler')

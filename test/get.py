@@ -56,7 +56,12 @@ def GET_A(msg):  # async version
     except:
         log.exception('GET_A exception')
     if GET_A_STOP:
-        drama.stop()
+        # test: catch Exit, see if task still dies.
+        try:
+            drama.stop()
+        except:
+            pass
+
 
 def GET_NESTED(msg):  # call the async version from a wait() loop
     '''
@@ -75,14 +80,13 @@ def GET_NESTED(msg):  # call the async version from a wait() loop
         else:
             log.error('GET_NESTED unexpected msg: %s', msg)
     except:
-        log.exception('GET_NESTED exception')  # do we see the Exit here?  yeah.
-        # we can catch it and choose not to exit, which is bad.
+        log.exception('GET_NESTED exception')
     drama.stop()
 
 try:
     log.info('drama.init(%s)', taskname)
     drama.init(taskname, actions=[GET, GET_A, GET_NESTED])
-    drama.blind_obey(taskname, 'GET_NESTED')
+    drama.blind_obey(taskname, 'GET_A')#_NESTED')
     drama.run()
 finally:
     log.info('drama.stop()')
@@ -93,7 +97,4 @@ finally:
 TODO: check blind_obey().  if the taskname is us, we can check the action
       list and at least raise an error if action is not in the list --
       as opposed to now, where nothing happens with no error.
-
-TODO: have drama.Exit() call blind_obey(EXIT) in its constructor.
-      users shouldn't be responsible for propagating it correctly.
 '''
