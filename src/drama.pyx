@@ -689,13 +689,11 @@ cdef object _obj_from_sds(SdsIdType id):
     
     #_log.debug('_obj_from_sds: calling PyBytes_FromStringAndSize(%x, %d)', <unsigned long>buf, buflen)
     #sbuf = PyBytes_FromStringAndSize(<char*>buf, buflen)
-    # use a (mutable) bytearray so ndarray is WRITEABLE without needing to copy.
+    # use a (mutable) bytearray so ndarray is WRITEABLE without needing to .copy().
     sbuf = PyByteArray_FromStringAndSize(<char*>buf, buflen)
     #_log.debug('_obj_from_sds: sbuf %s: %r', type(sbuf), sbuf)
 
-    # using a string as a buffer is problematic because strings are immutable
-    # and numpy decides to use the buffer memory directly.
-    # NOTE use .copy() to force array memory ownership.
+    # issue: UNDEFINED stuff doesn't seem to work.  "external" flag?
     
     if code == SDS_CHAR:
 #        _log.debug('_obj_from_sds: SDS_CHAR')
@@ -729,7 +727,7 @@ cdef object _obj_from_sds(SdsIdType id):
             try:
                 obj = _numpy.char.decode(obj)
             except UnicodeDecodeError:
-                obj = _numpy.char.decode('latin-1')
+                obj = _numpy.char.decode(obj, 'latin-1')
 #        _log.debug('_obj_from_sds: return obj %s', obj)
         return obj
 
@@ -1019,6 +1017,10 @@ class TransId:
         # since this mechanism bypasses dispatcher for the current action,
         # duplicate the monitor-handling code for automatic cleanup later.
         msg = Message()
+        _log.debug('wait(%s,%s) msg: %s', seconds, dontblock, msg)
+        # bug? an EXIT during a wait() will have DITS_REA_OBEY.
+        if msg.reason == DITS_REA_OBEY:
+            raise Exit
         if msg.reason == DITS_REA_TRIGGER \
             and msg.status == DITS__MON_STARTED \
             and 'MONITOR_ID' in msg.arg:
@@ -1589,8 +1591,9 @@ def init( taskname,
     # make sure global environment is cleaned up
     stop(taskname)
 
-    # flags must include X_COMPATIBLE for select() loop to work
-    flags |= DITS_M_X_COMPATIBLE
+    # flags must include X_COMPATIBLE for select() loop to work,
+    #   and must include M_SELF_BYTES for TIDE to work.
+    flags |= DITS_M_X_COMPATIBLE | DITS_M_SELF_BYTES
     _log.debug('init: flags: %d = 0x%x', flags, flags)
 
     #jitSetDefaults( flags, 0.0, *buffers, &status )
@@ -1692,9 +1695,12 @@ def get_fd_sets():
         x.add(_fd)
 
     if _altin:
+        _log.debug('get_fd_sets: _altin loop')
         for i in xrange(DITS_C_ALT_IN_MAX):
             if _altin.Array[i].number < 0:
                 continue
+            _log.debug('get_fd_sets: _altin[%d] number=%d, condition=0x%x',
+                        i, _altin.Array[i].number, _altin.Array[i].condition)
             if (_altin.Array[i].condition & DITS_M_READ_MASK):
                 r.add(_altin.Array[i].number)
             if (_altin.Array[i].condition & DITS_M_WRITE_MASK):
@@ -1717,9 +1723,12 @@ def process_fd(fd):
     cdef StatusType status = 0
     cdef long exit_flag = 0
 
-    if fd < 0:
-        # TODO raise exception?
-        return
+    # this comparison fails for e.g. socket objects.  don't bother.
+    #if fd < 0:
+    #    # TODO raise exception?
+    #    return
+    
+    _log.debug('process_fd(%s)', fd)
 
     # Is the main Dits fd?
     if fd == _fd:
@@ -1747,6 +1756,7 @@ def process_fd(fd):
     if _altin:
         for i in xrange(DITS_C_ALT_IN_MAX):
             if fd == _altin.Array[i].number:
+                _log.debug('process_fd: _altin.Array[%d].routine', fd)
                 _altin.Array[i].routine(_altin.Array[i].client_data, &status)
                 if status or _altin.exit_flag:
                     s = 'TIDE routine, fd %d, index %d' % (fd, i)
@@ -1759,6 +1769,90 @@ def process_fd(fd):
                     _log.warn('%s', bs)
                     ErsClear(&status)
 
+
+# Cython doesn't play nice with function attributes as static variables
+run_loop_depth = -1
+
+def run_loop(tk, timeout_seconds, return_dits_msg=False):
+    '''
+    The message-checking loop used by run() and wait().
+    For wait(), return_dits_msg=True.  This will cause a Dits message
+    to break the loop so wait() can return to the calling action.
+    '''
+    cdef StatusType status = 0
+    global run_loop_depth
+    
+    try:
+        run_loop_depth += 1
+        
+        # process dits messages immediately in wait() loops
+        if return_dits_msg:
+            msg_count = DitsMsgAvail(&status)
+            # TODO we might just need to ignore these
+            if status:
+                raise BadStatus(status, 'run_loop(%d) DitsMsgAvail'%(run_loop_depth))
+            if msg_count:
+                _log.debug('run_loop(%d): msg_count %d, return_dits_msg', run_loop_depth, msg_count)
+                return
+        
+        looping = True
+        while looping:
+            # fd's might change, must check every time
+            _log.debug('run_loop(%d): calling get_fd_sets()', run_loop_depth)
+            r,w,x = get_fd_sets()
+            sr,sw,sx = [],[],[]
+            _log.debug('run_loop(%d): select(%s,%s,%s,%s)', run_loop_depth, r,w,x,timeout_seconds)
+            try:
+                sr,sw,sx = _select.select(r,w,x, timeout_seconds)
+            except _select.error as e:
+                # we can ignore 'Interrupted system call'
+                if e.args[0] != _errno.EINTR:
+                    raise
+            fds = set(sr) | set(sw) | set(sx)
+            _log.debug('run_loop(%d): fds %s', run_loop_depth, fds)
+            for fd in fds:
+                if return_dits_msg and fd == _fd:
+                    _log.debug('run_loop(%d): return_dits_msg', run_loop_depth)
+                    looping = False
+                else:
+                    _log.debug('run_loop(%d): process_fd(%s)', run_loop_depth, fd)
+                    process_fd(fd)
+            if tk is not None:
+                _log.debug('run_loop(%d): %r.update()', run_loop_depth, tk)
+                tk.update()
+    finally:
+        run_loop_depth -= 1
+    
+    # run_loop
+
+
+cdef void event_wait_handler(void *client_data, StatusType *status):
+    '''
+    C function registered with DitsPutEventWaitHandler
+    to invoke run_loop() during a wait().
+    
+    Note we call EXIT manually in the exception handlers since
+    exceptions probably won't escape this C function.
+    '''
+    if status[0]:
+        return
+    args = <object><PyObject*>client_data
+    tk, timeout_seconds, TclError = args
+    try:
+        _log.debug('event_wait_handler: run_loop')
+        run_loop(tk, timeout_seconds, True)
+    except Exit:
+        blind_obey(_taskname, "EXIT")
+    except TclError as e:
+        blind_obey(_taskname, "EXIT")
+        if e.args[0].find('application has been destroyed') < 0:
+            _log.exception('event_wait_handler')
+    except:
+        blind_obey(_taskname, "EXIT")
+        _log.exception('event_wait_handler')
+        # raise?  it'll probably be ignored anyway
+        raise
+        
 
 def run(tk=None, hz=50):
     '''
@@ -1777,6 +1871,7 @@ def run(tk=None, hz=50):
     an update() method as 'tk', which might be useful if you want something
     called periodically and don't want to set up an action for it.
     '''
+    cdef StatusType status = 0
 
     # Tkinter is a big module, don't import unnecessarily
     if 'Tkinter' in _sys.modules:
@@ -1798,28 +1893,16 @@ def run(tk=None, hz=50):
     if tk is not None:
         timeout_seconds = 1.0/hz
         _log.debug('run: will call %r.update() every %g seconds', tk, timeout_seconds)
+    
+    _log.debug('run: DitsPutEventWaitHandler')
+    client_data = [tk, timeout_seconds, TclError]
+    DitsPutEventWaitHandler(event_wait_handler, <void*><PyObject*>client_data, &status)
+    if status:
+        raise BadStatus(status, 'DitsPutEventWaitHandler')
 
     try:
-        while True:
-            # fd's might change, must check every time
-            _log.debug('run: calling get_fd_sets()')
-            r,w,x = get_fd_sets()
-            sr,sw,sx = [],[],[]
-            _log.debug('run: select(%s,%s,%s,%s)', r,w,x,timeout_seconds)
-            try:
-                sr,sw,sx = _select.select(r,w,x, timeout_seconds)
-            except _select.error as e:
-                # we can ignore 'Interrupted system call'
-                if e.args[0] != _errno.EINTR:
-                    raise
-            fds = set(sr) | set(sw) | set(sx)
-            _log.debug('run: fds %s', fds)
-            for fd in fds:
-                _log.debug('run: process_fd(%s)', fd)
-                process_fd(fd)
-            if tk is not None:
-                _log.debug('run: %r.update()', tk)
-                tk.update()
+        _log.debug('run: run_loop')
+        run_loop(tk, timeout_seconds)
     except Exit:
         # catch Exit() so it doesn't cause bad $? exit status
         pass

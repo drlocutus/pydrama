@@ -7,6 +7,8 @@ from libc.string cimport memset, memcmp, strlen, strcpy
 cdef extern from "Python.h":
     object PyBytes_FromStringAndSize(char *s, Py_ssize_t len)
     object PyByteArray_FromStringAndSize(char *s, Py_ssize_t len)
+    ctypedef struct PyObject:
+        pass
 
 # i get tired of typing unsigned long
 ctypedef unsigned long ulong
@@ -302,6 +304,7 @@ cdef extern from "DitsSys.h":
 
     enum:
         DITS_M_X_COMPATIBLE
+        DITS_M_SELF_BYTES
         DITS_M_IMB_ROUND_ROBIN
         DITS_M_READ_MASK
         DITS_M_WRITE_MASK
