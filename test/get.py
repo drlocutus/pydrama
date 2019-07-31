@@ -97,4 +97,6 @@ finally:
 TODO: check blind_obey().  if the taskname is us, we can check the action
       list and at least raise an error if action is not in the list --
       as opposed to now, where nothing happens with no error.
+      However, needs the full action list (including e.g. EXIT),
+      not just the actions registered via python.
 '''

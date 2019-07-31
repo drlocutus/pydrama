@@ -750,9 +750,10 @@ def sds_from_xml(buf):
 def obj_from_xml(buf):
     '''Return python object parsed from XML buf (data or filename).'''
     id = sds_from_xml(buf)
+    name, code, dims = sds_info(id)
     obj = obj_from_sds(id)
     delete_sds(id)
-    return obj
+    return {name:obj}
 
 
 def make_argument(*args, **kwargs):
