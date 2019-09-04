@@ -142,6 +142,13 @@ class RetryMonitor(object):
                 # on death OR rebirth.  but even on rebirth, an immediate
                 # restart will get a CLOSECONN error.  wait for reschedule.
                 self.clear('DIED')
+            elif msg.reason == drama.REA_MESREJECTED:
+                # drama might not be running on remote machine,
+                # or the parameter might not exist in the remote task (yet).
+                # output status (TODO warning?) and wait for resched.
+                self.log.debug('MESREJECTED: monitor %s.%s status: %d: %s',
+                               self.task, self.param, msg.status, drama.get_status_string(msg.status))
+                self.clear('MESREJECTED')
             elif msg.reason == drama.REA_TRIGGER:
                 self.resched_count = 0
                 if msg.status == drama.MON_STARTED:
