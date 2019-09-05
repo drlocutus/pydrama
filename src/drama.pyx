@@ -1848,7 +1848,16 @@ cdef void event_wait_handler(void *client_data, StatusType *status):
         _log.exception('event_wait_handler')
         # raise?  it'll probably be ignored anyway
         raise
-        
+
+
+# tk <Destroy> event callback to detect window close.
+_destroy_once = 1
+def on_destroy(event):
+    global _destroy_once
+    if _destroy_once:
+        _destroy_once = 0
+        Exit('tk destroyed')  # no need to raise
+            
 
 def run(tk=None, hz=50):
     '''
@@ -1864,8 +1873,8 @@ def run(tk=None, hz=50):
         hz: select() loop (GUI) update rate, default 50Hz.
 
     Note that (thanks to duck-typing) you could pass any object with
-    an update() method as 'tk', which might be useful if you want something
-    called periodically and don't want to set up an action for it.
+    update() and bind() method as 'tk', which might be useful if you want
+    something called periodically and don't want to set up an action for it.
     '''
     cdef StatusType status = 0
 
@@ -1888,7 +1897,10 @@ def run(tk=None, hz=50):
     timeout_seconds = None
     if tk is not None:
         timeout_seconds = 1.0/hz
-        _log.debug('run: will call %r.update() every %g seconds', tk, timeout_seconds)
+        _log.debug('run: calling %r.update() every %g seconds', tk, timeout_seconds)
+        # ...starting now, since the first update() can be very slow.
+        tk.bind("<Destroy>", on_destroy)
+        tk.update()
     
     _log.debug('run: DitsPutEventWaitHandler')
     client_data = [tk, timeout_seconds, TclError]
