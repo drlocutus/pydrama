@@ -156,7 +156,7 @@ class RetryMonitor(object):
                         self.cancel('STARTED')  # paranoia
                     self.mid = msg.arg['MONITOR_ID']
                     self.connected = True
-                    self.log.debug('STARTED: %s.%s MONITOR_ID=%d', self.task, self.param, self.mid)
+                    self.log.info('STARTED: %s.%s MONITOR_ID=%d', self.task, self.param, self.mid)
                 elif msg.status == drama.MON_CHANGED:
                     self.connected = True
                     return True
