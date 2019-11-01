@@ -221,6 +221,12 @@ _entry_reason_string = {
 ############### Functions and Classes #########################
 
 
+def segfault():
+    '''Test function: trigger a segfault.'''
+    cdef int *ptr = NULL
+    return ptr[0]
+
+
 def errors_from_header(filename):
     '''
     Look for error code definitions from a header file and return them
