@@ -191,13 +191,11 @@ if __name__ == "__main__":
     log.name = taskname
     log.manager.loggerDict[log.name] = log
     
+    retry_monitor = RetryMonitor(task,param)
+    
     def MONITOR(msg):
-        if not hasattr(MONITOR, 'retry_monitor'):
-            MONITOR.retry_monitor = RetryMonitor(task,param)
-            # ctrl-Z testing
-            #MONITOR.retry_monitor.on_resched = MONITOR.retry_monitor.nop
         log.debug('%s', msg)
-        if MONITOR.retry_monitor.handle(msg):
+        if retry_monitor.handle(msg):
             log.info('%s.%s: %s', task, param, msg.arg)
         drama.reschedule(timeout)
     
