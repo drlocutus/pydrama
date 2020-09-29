@@ -1,7 +1,6 @@
 #!/local/python3/bin/python3
 '''
-retry.py
-RMB 20190826
+drama/retry.py  RMB 20190826
 
 Module supplying the RetryMonitor class,  which monitors a parameter in a
 remote task and automatically attempts to reconnect as needed.
@@ -26,6 +25,22 @@ ISSUE: If this subscriber task gets hung (e.g. ctrl-Z) long enough for the
                    user timeout on the monitor, but avoids killing the
                    publisher when we wake from sleep.
        
+
+
+Copyright (C) 2020 East Asian Observatory
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 '''
 
 if __name__ == "__main__":

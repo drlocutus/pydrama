@@ -1,6 +1,7 @@
 #!/local/python3/bin/python3
 '''
-RMB 20190724
+test/return.py      RMB 20190724
+
 Tests returning a value from an action.
 
 As it turns out, returning a value when the action has been rescheduled
@@ -12,6 +13,22 @@ This is relevant to rts.py FE clients, which need to return MULT.
 Since this is normally done before rescheduling to wait for PTCS,
 rts.py ought to cache return values for later.  The C version of
 rtsDClient does this by making retArg a static variable.
+
+
+Copyright (C) 2020 East Asian Observatory
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 '''
 import jac_sw
 import drama

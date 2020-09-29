@@ -3,9 +3,9 @@
 #cython: c_string_type=str
 #cython: c_string_encoding=default
 '''
-DRAMA Python module.
+drama.pyx   RMB 20140926
 
-Author: Ryan Berthold, EAO
+DRAMA Python module.
 
 A note on logging/debug output:
 
@@ -31,6 +31,22 @@ A note on logging/debug output:
     Note also that this module expects a MsgOutHandler to be installed
     so that any errors will be properly sent to the calling task;
     the module never makes any explicit MsgOut/ErsOut/ErsRep calls of its own.
+
+
+Copyright (C) 2020 East Asian Observatory
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 '''
 
 
