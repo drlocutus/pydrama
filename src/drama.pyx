@@ -10,9 +10,11 @@ DRAMA Python module.
 A note on logging/debug output:
 
     This module uses the standard python 'logging' module, not jitDebug.
-    It uses "drama" for the logger name.
-    A NullHandler is installed, so you don't need to configure logging
-    if you don't want to.
+    The logger name is "drama".
+    A NullHandler is installed to prevent Cython exceptions.
+    The log level is set to INFO.  If you require debug output, call:
+    
+        logging.getLogger('drama').setLevel(logging.DEBUG)
 
     For a basic logging config that ignores all the debug output
     from this module, logs to a file in /jac_logs/YYYYMMDD,
@@ -102,6 +104,7 @@ _callbacks = {}
 #_log = _logging.getLogger(__name__)  # drama.__drama__, not great
 _log = _logging.getLogger('drama')
 _log.addHandler(_logging.NullHandler())  # avoid 'no handlers' exception
+_log.setLevel(_logging.INFO)  # be quiet even if root level is DEBUG
 
 
 ############ Global Lookup Dictionaries #################
