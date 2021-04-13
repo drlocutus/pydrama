@@ -1649,6 +1649,12 @@ def init( taskname,
 
     if tidefile is not None:
         _log.debug('init: tideInit(%s)', tidefile)
+        # connection problems can occur if caRepeater is not already running
+        try:
+            import subprocess
+            subprocess.Popen('caRepeater')
+        except:
+            pass
         tideInit(&_altin, tidefile, &status)
         if status != 0:
             raise BadStatus(status, "tideInit(%s)" % (tidefile) )
