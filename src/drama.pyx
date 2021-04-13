@@ -1653,6 +1653,7 @@ def init( taskname,
         try:
             import subprocess
             subprocess.Popen('caRepeater')
+            _time.sleep(.05)
         except:
             pass
         tideInit(&_altin, tidefile, &status)
