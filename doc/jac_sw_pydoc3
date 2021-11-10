@@ -1,0 +1,6 @@
+#!/local/python3/bin/python3
+
+import jac_sw
+import pydoc
+if __name__ == '__main__':
+    pydoc.cli()

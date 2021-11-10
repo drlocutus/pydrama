@@ -1,8 +1,8 @@
 #!/bin/sh
 cd `dirname "$0"`
-/local/python/bin/pydoc -w drama
-/local/python/bin/pydoc -w drama.__drama__
-/local/python/bin/pydoc -w drama.log
-/local/python/bin/pydoc -w drama.qt4
-/local/python/bin/pydoc -w drama.rts
-/local/python/bin/pydoc -w drama.version
+./jac_sw_pydoc3 -w drama
+./jac_sw_pydoc3 -w drama.__drama__
+./jac_sw_pydoc3 -w drama.log
+./jac_sw_pydoc3 -w drama.qt4
+./jac_sw_pydoc3 -w drama.rts
+./jac_sw_pydoc3 -w drama.version
