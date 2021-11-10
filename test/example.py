@@ -58,6 +58,11 @@ pub_data = {
     'mystring': 'hello'
     }
 
+# NOTE: Actions all have NAME(msg) function signatures,
+# where msg is an instance of the drama.Message class.
+# It can be inspected to determine why the function
+# was called and with what arguments.
+
 def PUB(msg):
     '''
     PUB action.
