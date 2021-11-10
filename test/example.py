@@ -238,3 +238,118 @@ finally:
     drama.stop()
 
 
+'''
+# Annotated example output:
+
+[ryanb@koloa pydrama]$ cd test/
+[ryanb@koloa test]$ ./example.py &
+[1] 25322
+[ryanb@koloa test]$ 2021-11-10 12:21:22,983 INFO PYEX_25322: drama.init(PYEX_25322)
+
+# Using ditscmd to send commands to the running task.
+# The -gv option will do a verbose "get" on the DATA parameter.
+
+[ryanb@koloa test]$ ditscmd PYEX_25322 -gv DATA
+DITSCMD_62ee:ArgStructure         Struct   
+DITSCMD_62ee:  DATA                 Struct   
+DITSCMD_62ee:    timestamp            Double  1636582910 
+DITSCMD_62ee:    number               Ubyte   28 
+DITSCMD_62ee:    mylist               Char   [2,4] "1"
+DITSCMD_62ee:    mynums               Double [4] { 1.2 2.3 3.4 4.5 }
+DITSCMD_62ee:    myarr                Double [3] { 10 20 30 }
+DITSCMD_62ee:    myfloat              Float   3.14159 
+DITSCMD_62ee:    mydict               Struct   
+DITSCMD_62ee:      x                    Ubyte   1 
+DITSCMD_62ee:      y                    Ubyte   2 
+DITSCMD_62ee:      z                    Ubyte   3 
+DITSCMD_62ee:    mystring             Char   [6] "hello"
+
+# Calling the GET_S action with no arguments.
+# Note that the log.info() output gets printed twice:
+# it is printed directly to stderr by the StreamHandler,
+# then sent back to the ditscmd by the MsgOutHandler,
+# which prints it again.
+# Note also that long messages are automatically broken up
+# into multiple shorter MsgOut commands by the MsgOutHandler.
+
+[ryanb@koloa test]$ ditscmd PYEX_25322 GET_S 
+2021-11-10 12:23:16,432 INFO PYEX_25322: GET_S(PYEX_25322, DATA, timeout=None)
+DITSCMD_6301:PYEX_25322:INFO:GET_S(PYEX_25322, DATA, timeout=None)
+2021-11-10 12:23:16,432 INFO PYEX_25322: GET_S reply: Message(DITSCMD_6301:DATA, GET_S, 0x11a6710, DITS_REA_COMPLETE, 0:ALL-S-OK, Status OK, ArgStructure, {'DATA': {'timestamp': 1636582996.2088468, 'number': 114, 'mylist': array(['1', '2', 'a', 'b'], dtype='<U1'), 'mynums': array([1.2, 2.3, 3.4, 4.5]), 'myarr': array([10., 20., 30.]), 'myfloat': 3.1415927410125732, 'mydict': {'x': 1, 'y': 2, 'z': 3}, 'mystring': 'hello'}}, None)
+DITSCMD_6301:PYEX_25322:INFO:GET_S reply: Message(DITSCMD_6301:DATA, GET_S, 0x11a6710, DITS_REA_COMPLETE, 0:ALL-S-OK, Status OK, ArgStructure, {'DATA': {'timestamp':
+DITSCMD_6301:PYEX_25322: 1636582996.2088468, 'number': 114, 'mylist': array(['1', '2', 'a', 'b'], dtype='<U1'), 'mynums': array([1.2, 2.3, 3.4, 4.5]), 'myarr': array([10., 20.,
+DITSCMD_6301:PYEX_25322: 30.]), 'myfloat': 3.1415927410125732, 'mydict': {'x': 1, 'y': 2, 'z': 3}, 'mystring': 'hello'}}, None)
+2021-11-10 12:23:16,433 INFO PYEX_25322: GET_S DATA: {'timestamp': 1636582996.2088468, 'number': 114, 'mylist': array(['1', '2', 'a', 'b'], dtype='<U1'), 'mynums': array([1.2, 2.3, 3.4, 4.5]), 'myarr': array([10., 20., 30.]), 'myfloat': 3.1415927410125732, 'mydict': {'x': 1, 'y': 2, 'z': 3}, 'mystring': 'hello'}
+DITSCMD_6301:PYEX_25322:INFO:GET_S DATA: {'timestamp': 1636582996.2088468, 'number': 114, 'mylist': array(['1', '2', 'a', 'b'], dtype='<U1'), 'mynums': array([1.2, 2.3, 3.4, 4.5]),
+DITSCMD_6301:PYEX_25322: 'myarr': array([10., 20., 30.]), 'myfloat': 3.1415927410125732, 'mydict': {'x': 1, 'y': 2, 'z': 3}, 'mystring': 'hello'}
+[ryanb@koloa test]$
+
+# Calling GET_A with too short of a timeout.
+
+[ryanb@koloa test]$ ditscmd PYEX_25322 GET_A timeout=0
+2021-11-10 12:26:07,837 INFO PYEX_25322: GET_A(PYEX_25322, DATA, timeout=0.0)
+DITSCMD_6319:PYEX_25322:INFO:GET_A(PYEX_25322, DATA, timeout=0.0)
+2021-11-10 12:26:07,837 ERROR PYEX_25322: GET_A timeout after 0 seconds
+##DITSCMD_6319:PYEX_25322:ERROR:GET_A timeout after 0 seconds
+[ryanb@koloa test]$ 
+
+# Calling MON.  The action keeps running until the ditscmd
+# is killed with Ctrl-C, whereupon it gets the unexpected REA_DIED message,
+# cancels the monitor, and stops.
+
+[ryanb@koloa test]$ ditscmd PYEX_25322 MON
+2021-11-10 12:26:53,283 INFO PYEX_25322: MON(PYEX_25322, DATA, timeout=None)
+DITSCMD_6323:PYEX_25322:INFO:MON(PYEX_25322, DATA, timeout=None)
+2021-11-10 12:26:53,283 INFO PYEX_25322: MON started, id=0
+DITSCMD_6323:PYEX_25322:INFO:MON started, id=0
+2021-11-10 12:26:53,283 INFO PYEX_25322: MON changed: {'timestamp': 1636583212.5887132, 'number': 330, 'mylist': array(['1', '2', 'a', 'b'], dtype='<U1'), 'mynums': array([1.2, 2.3, 3.4, 4.5]), 'myarr': array([10., 20., 30.]), 'myfloat': 3.1415927410125732, 'mydict': {'x': 1, 'y': 2, 'z': 3}, 'mystring': 'hello'}
+DITSCMD_6323:PYEX_25322:INFO:MON changed: {'timestamp': 1636583212.5887132, 'number': 330, 'mylist': array(['1', '2', 'a', 'b'], dtype='<U1'), 'mynums': array([1.2, 2.3, 3.4, 4.5]),
+DITSCMD_6323:PYEX_25322: 'myarr': array([10., 20., 30.]), 'myfloat': 3.1415927410125732, 'mydict': {'x': 1, 'y': 2, 'z': 3}, 'mystring': 'hello'}
+2021-11-10 12:26:53,595 INFO PYEX_25322: MON changed: {'timestamp': 1636583213.5955217, 'number': 331, 'mylist': array(['1', '2', 'a', 'b'], dtype='<U1'), 'mynums': array([1.2, 2.3, 3.4, 4.5]), 'myarr': array([10., 20., 30.]), 'myfloat': 3.1415927410125732, 'mydict': {'x': 1, 'y': 2, 'z': 3}, 'mystring': 'hello'}
+DITSCMD_6323:PYEX_25322:INFO:MON changed: {'timestamp': 1636583213.5955217, 'number': 331, 'mylist': array(['1', '2', 'a', 'b'], dtype='<U1'), 'mynums': array([1.2, 2.3, 3.4, 4.5]),
+DITSCMD_6323:PYEX_25322: 'myarr': array([10., 20., 30.]), 'myfloat': 3.1415927410125732, 'mydict': {'x': 1, 'y': 2, 'z': 3}, 'mystring': 'hello'}
+2021-11-10 12:26:54,596 INFO PYEX_25322: MON changed: {'timestamp': 1636583214.5957422, 'number': 332, 'mylist': array(['1', '2', 'a', 'b'], dtype='<U1'), 'mynums': array([1.2, 2.3, 3.4, 4.5]), 'myarr': array([10., 20., 30.]), 'myfloat': 3.1415927410125732, 'mydict': {'x': 1, 'y': 2, 'z': 3}, 'mystring': 'hello'}
+DITSCMD_6323:PYEX_25322:INFO:MON changed: {'timestamp': 1636583214.5957422, 'number': 332, 'mylist': array(['1', '2', 'a', 'b'], dtype='<U1'), 'mynums': array([1.2, 2.3, 3.4, 4.5]),
+DITSCMD_6323:PYEX_25322: 'myarr': array([10., 20., 30.]), 'myfloat': 3.1415927410125732, 'mydict': {'x': 1, 'y': 2, 'z': 3}, 'mystring': 'hello'}
+2021-11-10 12:26:55,596 INFO PYEX_25322: MON changed: {'timestamp': 1636583215.5962248, 'number': 333, 'mylist': array(['1', '2', 'a', 'b'], dtype='<U1'), 'mynums': array([1.2, 2.3, 3.4, 4.5]), 'myarr': array([10., 20., 30.]), 'myfloat': 3.1415927410125732, 'mydict': {'x': 1, 'y': 2, 'z': 3}, 'mystring': 'hello'}
+DITSCMD_6323:PYEX_25322:INFO:MON changed: {'timestamp': 1636583215.5962248, 'number': 333, 'mylist': array(['1', '2', 'a', 'b'], dtype='<U1'), 'mynums': array([1.2, 2.3, 3.4, 4.5]),
+DITSCMD_6323:PYEX_25322: 'myarr': array([10., 20., 30.]), 'myfloat': 3.1415927410125732, 'mydict': {'x': 1, 'y': 2, 'z': 3}, 'mystring': 'hello'}
+^C2021-11-10 12:26:56,175 ERROR PYEX_25322: MON unexpected msg: Message(???:DITSCMD_6323, MON, 0x0, DITS_REA_DIED, 0:ALL-S-OK, Status OK, None, None, None)
+DITSCMD_6323:exit status:%DITS-F-SIGINT, DITS Exited via exit handler with signal SIGINT
+
+# Using HELP to check the running actions -- MON is no longer active.
+
+[ryanb@koloa test]$ 
+[ryanb@koloa test]$ ditscmd PYEX_25322 HELP
+DITSCMD_6333:PYEX_25322:Task PYEX_25322 has the following actions:
+DITSCMD_6333:PYEX_25322:    MON
+DITSCMD_6333:PYEX_25322:    GET_A
+DITSCMD_6333:PYEX_25322:    GET_S
+DITSCMD_6333:PYEX_25322:    PUB (Active)
+DITSCMD_6333:PYEX_25322:    INITIALISE
+DITSCMD_6333:PYEX_25322:    CONFIGURE
+DITSCMD_6333:PYEX_25322:    SETUP_SEQUENCE
+DITSCMD_6333:PYEX_25322:    SEQUENCE
+DITSCMD_6333:PYEX_25322:    END_OBSERVATION
+DITSCMD_6333:PYEX_25322:    END_OF_NIGHT
+DITSCMD_6333:PYEX_25322:    DEBUG
+DITSCMD_6333:PYEX_25322:    DEBUG_FILE
+DITSCMD_6333:PYEX_25322:    TEST
+DITSCMD_6333:PYEX_25322:    PING
+DITSCMD_6333:PYEX_25322:    REPORT
+DITSCMD_6333:PYEX_25322:    FREPORT
+DITSCMD_6333:PYEX_25322:    TASK_REGISTER
+DITSCMD_6333:PYEX_25322:    HELP (Active)
+DITSCMD_6333:PYEX_25322:    EXIT
+[ryanb@koloa test]$ 
+
+# Killing the task gracefully using the EXIT command.
+
+[ryanb@koloa test]$ ditscmd PYEX_25322 EXIT
+2021-11-10 12:28:03,995 INFO drama: Exit(('DitsMsgReceive',), {}) sent PYEX_25322 EXIT
+2021-11-10 12:28:03,995 INFO PYEX_25322: drama.stop()
+[ryanb@koloa test]$ 
+[1]    Done                          ./example.py
+[ryanb@koloa test]$ 
+
+'''
