@@ -62,8 +62,12 @@ def GET(msg):
 def GET_A(msg):  # async version
     try:
         if msg.reason == drama.REA_OBEY:
-            task = sys.argv[1]
-            parm = sys.argv[2]
+            if len(sys.argv > 2):
+                task = sys.argv[1]
+                parm = sys.argv[2]
+            else:
+                task = taskname  # self
+                parm = 'TIME'
             log.info('GET_A %s %s', task, parm)
             drama.get(task, parm)
             drama.reschedule(5)
@@ -103,9 +107,16 @@ def GET_NESTED(msg):  # call the async version from a wait() loop
         log.exception('GET_NESTED exception')
     drama.stop()
 
+
+def PUB(msg):
+    drama.set_param('TIME', time.time())
+    drama.reschedule(1)
+
+
 try:
     log.info('drama.init(%s)', taskname)
-    drama.init(taskname, actions=[GET, GET_A, GET_NESTED])
+    drama.init(taskname, actions=[GET, GET_A, GET_NESTED, PUB])
+    drama.blind_obey(taskname, 'PUB')
     drama.blind_obey(taskname, 'GET_A')#_NESTED')
     drama.run()
 finally:

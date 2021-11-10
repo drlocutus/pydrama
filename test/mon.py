@@ -23,6 +23,7 @@ import sys
 import os
 import jac_sw
 import drama
+import time
 
 taskname = 'PYMON_' + str(os.getpid())
 
@@ -36,8 +37,12 @@ log = logging.getLogger(taskname)
 def MON(msg):
     try:
         if msg.reason == drama.REA_OBEY:
-            task = sys.argv[1]
-            parm = sys.argv[2]
+            if len(sys.argv > 2):
+                task = sys.argv[1]
+                parm = sys.argv[2]
+            else:
+                task = taskname  # self
+                parm = 'TIME'
             log.info('MON %s %s', task, parm)
             drama.monitor(task, parm)
             drama.reschedule()
@@ -59,10 +64,15 @@ def MON(msg):
         log.exception('MON exception')
 
 
+def PUB(msg):
+    drama.set_param('TIME', time.time())
+    drama.reschedule(1)
+
 
 try:
     log.info('drama.init(%s)', taskname)
-    drama.init(taskname, actions=[MON])
+    drama.init(taskname, actions=[MON, PUB])
+    drama.blind_obey(taskname, 'PUB')
     drama.blind_obey(taskname, 'MON')
     drama.run()
 finally:
