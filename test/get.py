@@ -23,6 +23,7 @@ import sys
 import os
 import jac_sw
 import drama
+import time
 
 taskname = 'PYGET_' + str(os.getpid())
 
@@ -30,7 +31,7 @@ import drama.log
 drama.log.setup()
 import logging
 log = logging.getLogger(taskname)
-logging.getLogger('drama').setLevel(logging.DEBUG)
+#logging.getLogger('drama').setLevel(logging.DEBUG)
 
 GET_STOP = True
 GET_A_STOP = True
@@ -62,7 +63,7 @@ def GET(msg):
 def GET_A(msg):  # async version
     try:
         if msg.reason == drama.REA_OBEY:
-            if len(sys.argv > 2):
+            if len(sys.argv) > 2:
                 task = sys.argv[1]
                 parm = sys.argv[2]
             else:

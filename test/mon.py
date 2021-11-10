@@ -37,7 +37,7 @@ log = logging.getLogger(taskname)
 def MON(msg):
     try:
         if msg.reason == drama.REA_OBEY:
-            if len(sys.argv > 2):
+            if len(sys.argv) > 2:
                 task = sys.argv[1]
                 parm = sys.argv[2]
             else:
