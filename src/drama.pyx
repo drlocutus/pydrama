@@ -1036,7 +1036,7 @@ class TransId:
         _log.debug('wait(%s,%s) msg: %s', seconds, dontblock, msg)
         # bug? an EXIT during a wait() will have DITS_REA_OBEY.
         if msg.reason == DITS_REA_OBEY:
-            raise Exit
+            raise Exit('DITS_REA_OBEY in TransId.wait')
         if msg.reason == DITS_REA_TRIGGER \
             and msg.status == DITS__MON_STARTED \
             and 'MONITOR_ID' in msg.arg:
@@ -1482,7 +1482,7 @@ cdef void dispatcher(StatusType *status):
     finally:
         if status[0] != 0:
             if n is not None:
-                bs = BadStatus(status[0], '%s: bad status on entry' % (n))
+                bs = BadStatus(status[0], '%s: bad status on entry, sending %s EXIT' % (n, _taskname))
                 _log.critical('%s', bs)
             #DitsPutRequest(DITS_REQ_EXIT, &tstatus)  # doesn't work
             DitsPutRequest(DITS_REQ_END, &tstatus)
@@ -1524,7 +1524,7 @@ cdef void dispatcher(StatusType *status):
         _log.exception('%s: bad status', n)
     except Exit as e:
         status[0] = DITS__EXITHANDLER
-        _log.debug('%s: %r', n, e)
+        _log.debug('%s: raised %r', n, e)
         # Exit now sends EXIT on creation
         #blind_obey(_taskname, "EXIT")  # DITS_REQ_EXIT doesn't work
     except:
@@ -1666,6 +1666,7 @@ def init( taskname,
     for k,v in _actions.items():
         acts += '\n  %s : %s' % (k,v)
     _log.debug(acts)
+    # init
 
 
 def register_action(name, action):
@@ -1766,9 +1767,9 @@ def process_fd(fd):
             msg_count = DitsMsgAvail(&status)
             _log.debug('process_fd: msg_count %d', msg_count)
         if status:
-            raise BadStatus(status, 'DitsMsgReceive')
+            raise BadStatus(status, 'process_fd: DitsMsgReceive')
         if exit_flag:
-            raise Exit('DitsMsgReceive')
+            raise Exit('process_fd: DitsMsgReceive')
         return
 
     # Is it a user-callback registered fd?
@@ -1865,19 +1866,21 @@ cdef void event_wait_handler(void *client_data, StatusType *status):
     try:
         _log.debug('event_wait_handler: run_loop')
         run_loop(tk, timeout_seconds, True)
-    except Exit:
+    except Exit as e:
         status[0] = DITS__EXITHANDLER
         # Exit now sends EXIT on creation
         #blind_obey(_taskname, "EXIT")
+        _log.debug('event_wait_handler caught %r', e)
     except TclError as e:
+        status[0] = DITS__EXITHANDLER
+        _log.debug('event_wait_handler caught %r, sending %s EXIT', e, _taskname)
         blind_obey(_taskname, "EXIT")
         if e.args[0].find('application has been destroyed') < 0:
             _log.exception('event_wait_handler')
-        else:
-            status[0] = DITS__EXITHANDLER
     except:
+        status[0] = DITS__EXITHANDLER
+        _log.exception('event_wait_handler sending %s EXIT', _taskname)
         blind_obey(_taskname, "EXIT")
-        _log.exception('event_wait_handler')
         # raise?  it'll probably be ignored anyway
         raise
 
@@ -1943,10 +1946,12 @@ def run(tk=None, hz=50):
     try:
         _log.debug('run: run_loop')
         run_loop(tk, timeout_seconds)
-    except Exit:
+    except Exit as e:
         # catch Exit() so it doesn't cause bad $? exit status
+        _log.debug('run caught %r', e)
         pass
     except TclError as e:
+        _log.debug('run caught %r', e)
         # exit quietly if tk destroyed, else reraise
         if e.args[0].find('application has been destroyed') < 0:
             raise

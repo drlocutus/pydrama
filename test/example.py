@@ -69,6 +69,13 @@ def PUB(msg):
     Reschedules every second to update and publish
     the global pub_data structure as DATA.
     '''
+    # Check the entry reason.  If action was kicked, do not reschedule.
+    # The action will end if it returns without rescheduling.
+    if msg.reason == drama.REA_KICK:
+        log.info('PUB kicked.')
+        return
+    
+    # Update the data we want to publish
     global pub_data
     pub_data['timestamp'] = time.time()
     pub_data['number'] += 1
@@ -222,12 +229,52 @@ def MON(msg):
     # MON end
 
 
+def WAIT(msg):
+    '''
+    WAIT action.
+    Calls drama.wait to wait for a new message.
+    This is actually a test to see if EXIT works during a wait.
+    Arguments:
+        - timeout: optional timeout in seconds
+    '''
+    if msg.reason == drama.REA_OBEY:
+        args,kwargs = drama.parse_argument(msg.arg)
+        def WAIT_ARGS(timeout=None):
+            if timeout is None:
+                return timeout
+            return float(timeout)
+        timeout = WAIT_ARGS(*args, **kwargs)
+        log.info('WAIT(%s)', timeout)
+        drama.wait(timeout)
+        log.info('WAIT done.')
+    else:
+        log.info('WAIT other msg: %s', msg)
+
+    # WAIT end
+
+
+def LEVEL(msg):
+    '''
+    LEVEL action.
+    Arguments:
+        - name: name of log to set level of (e.g. this taskname or "drama")
+        - level: int, new logging level (e.g. 10 for logging.DEBUG)
+    '''
+    args,kwargs = drama.parse_argument(msg.arg)
+    def LEVEL_ARGS(name, level):
+        return name, int(level)
+    name,level = LEVEL_ARGS(*args,**kwargs)
+    log.info('LEVEL(%s,%d)', name, level)
+    logging.getLogger(name).setLevel(level)
+    # LEVEL end
+    
+
 # It's important to call drama.stop() to make sure this task's
 # communication buffers and semaphores are cleaned up in shared memory.
 # Always wrap drama.run() and drama.stop() in a try...finally block.
 try:
     log.info('drama.init(%s)', taskname)
-    drama.init(taskname, actions=[PUB, GET_S, GET_A, MON])
+    drama.init(taskname, actions=[PUB, GET_S, GET_A, MON, WAIT, LEVEL])
     
     # Call obey to start the PUB action when we enter the main loop.
     # Outside of an action context we must use blind_obey and blind_kick
