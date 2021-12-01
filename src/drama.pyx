@@ -106,6 +106,9 @@ _log = _logging.getLogger('drama')
 _log.addHandler(_logging.NullHandler())  # avoid 'no handlers' exception
 _log.setLevel(_logging.INFO)  # be quiet even if root level is DEBUG
 
+# Global exit flag, set by Exit.__init__, to break loops
+_g_exit_flag = 0
+
 
 ############ Global Lookup Dictionaries #################
 
@@ -286,7 +289,9 @@ class Exit(DramaException):
     during __init__ to ensure the task dies even the exception is caught.
     '''
     def __init__(self, *arg, **kwarg):
+        global _g_exit_flag
         super(Exit, self).__init__(*arg, **kwarg)
+        _g_exit_flag = 1
         blind_obey(_taskname, "EXIT")
         _log.info('Exit(%s, %s) sent %s EXIT', arg, kwarg, _taskname)
 
@@ -1748,6 +1753,8 @@ def process_fd(fd):
     cdef StatusType status = 0
     cdef long exit_flag = 0
 
+    global _g_exit_flag
+
     # this comparison fails for e.g. socket objects.  don't bother.
     #if fd < 0:
     #    # TODO raise exception?
@@ -1760,7 +1767,7 @@ def process_fd(fd):
         _log.debug('process_fd: calling DitsMsgAvail')
         msg_count = DitsMsgAvail(&status)
         _log.debug('process_fd: msg_count %d', msg_count)
-        while not exit_flag and msg_count > 0:
+        while not _g_exit_flag and not exit_flag and msg_count > 0:
             _log.debug('process_fd: calling DitsMsgReceive')
             DitsMsgReceive(&exit_flag, &status)
             _log.debug('process_fd: calling DitsMsgAvail')
@@ -1770,6 +1777,8 @@ def process_fd(fd):
             raise BadStatus(status, 'process_fd: DitsMsgReceive')
         if exit_flag:
             raise Exit('process_fd: DitsMsgReceive')
+        if _g_exit_flag:
+            raise Exit('process_fd: _g_exit_flag')
         return
 
     # Is it a user-callback registered fd?
@@ -1805,7 +1814,7 @@ def run_loop(tk, timeout_seconds, return_dits_msg=False):
     to break the loop so wait() can return to the calling action.
     '''
     cdef StatusType status = 0
-    global run_loop_depth
+    global run_loop_depth, _g_exit_flag
     
     try:
         run_loop_depth += 1
@@ -1821,7 +1830,7 @@ def run_loop(tk, timeout_seconds, return_dits_msg=False):
                 return
         
         looping = True
-        while looping:
+        while looping and not _g_exit_flag:
             # fd's might change, must check every time
             _log.debug('run_loop(%d): calling get_fd_sets()', run_loop_depth)
             r,w,x = get_fd_sets()
