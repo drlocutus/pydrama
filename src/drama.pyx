@@ -1841,6 +1841,7 @@ def run_loop(tk, timeout_seconds, return_dits_msg=False):
             except _select.error as e:
                 # we can ignore 'Interrupted system call'
                 if e.args[0] != _errno.EINTR:
+                    _log.info('Exception: {}, errno={}'.format(e, _errno.errorcode[e.args[0]]))
                     raise
             fds = set(sr) | set(sw) | set(sx)
             _log.debug('run_loop(%d): fds %s', run_loop_depth, fds)

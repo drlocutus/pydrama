@@ -1,4 +1,4 @@
-#!/local/python3/bin/python3
+#!/usr/bin/env python3
 
 import jac_sw
 import pydoc

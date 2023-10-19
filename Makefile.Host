@@ -1,6 +1,6 @@
 include $(TOP)/config/CONFIG
 TARGETS = pyinstall
 pyinstall:
-	../setup.py install
+	python3 ../setup.py install
 include $(TOP)/config/RULES.Build
 
